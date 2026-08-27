@@ -1,0 +1,59 @@
+# Publish to PyPI when a version tag is pushed.
+#
+# Trusted publishing (OIDC), so there is no API token to store or rotate — PyPI is
+# configured to trust this repository, this workflow filename and the `pypi`
+# environment. The guard below refuses a tag that disagrees with telem/_version.py,
+# which is the one place the version is written; a published version can never be
+# re-uploaded, so a mis-tagged release is permanent.
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Naming ANY permission drops every unnamed one to `none`, so `contents: read`
+      # has to be spelled out or actions/checkout cannot read this repository at all.
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # `-dry.N` means REHEARSAL: build, guard and install-check run, the upload does
+      # not. A version on PyPI can never be replaced, only superseded.
+      - name: tag matches telem/_version.py
+        id: tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          case "$tag" in
+            *-dry.*) echo "dry=true" >> "$GITHUB_OUTPUT"; tag="${tag%-dry.*}" ;;
+            *)       echo "dry=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+          pkg="$(python -c "import re,pathlib;print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('telem/_version.py').read_text()).group(1))")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag does not match telem/_version.py $pkg"
+            exit 1
+          fi
+
+      - run: pip install build
+      - run: python -m build
+      - name: the wheel installs and imports
+        run: |
+          pip install dist/*.whl
+          python -c "import telem; print(telem.__version__)"
+      - name: rehearsal stops here
+        if: steps.tag.outputs.dry == 'true'
+        run: |
+          echo "REHEARSAL: the wheel built and installed, nothing was uploaded"
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        if: steps.tag.outputs.dry != 'true'

@@ -1,0 +1,38 @@
+# Install gate for the published SDK.
+#
+# Deliberately shallow: it proves the package installs and imports on both ends of the
+# supported range and that both console scripts resolve. The behavioural suite lives in
+# the monorepo this repository is exported from, and runs before anything reaches here.
+#
+# 3.10 is the floor from `requires-python`, not the version development happens on —
+# it is the end where a 3.11+ builtin slipping into the source shows up.
+#
+# This file is generated. Edits made here are replaced on the next sync — the
+# change belongs in the repository this one is exported from.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install .
+      - name: imports and reports its version
+        run: python -c "import telem; print(telem.__version__); assert telem.Telem"
+      - name: console scripts resolve
+        run: telem-install-skill --help > /dev/null
