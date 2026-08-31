@@ -11,8 +11,12 @@ gateway runs turns on a shared worker pool and delegate children run in their
 own, so one process holds a parent, its children, and unrelated sessions all
 firing the same global callbacks.
 
-Nothing here imports Hermes, a Telem client, or the trajectory helpers: it is a
-bounded dict of opaque window ids, and it is tested as one.
+Nothing here imports Hermes or a Telem client: it is a bounded dict of opaque
+window ids plus two bounded sets of opaque cache keys, and it is tested as one.
+The one import is :mod:`telem.integrations._trajectory_v5`, for the bounded set
+and the two caps the incremental-history protocol defines — stdlib-only, no
+client, no host — because the phase-1 caches below are that protocol's state and
+a second copy of the bound would be a second thing to keep in step.
 """
 
 from __future__ import annotations
@@ -21,6 +25,8 @@ import threading
 from collections import OrderedDict
 from typing import Any, NamedTuple
 from uuid import uuid4
+
+from telem.integrations._trajectory_v5 import CAPABILITY_CAP, DELIVERED_CAP, BoundedKeySet
 
 #: Hard cap on tracked sessions. ``on_session_finalize`` eviction is best effort
 #: — a crash or SIGKILL fires nothing, and child sessions have no teardown hook
@@ -65,6 +71,20 @@ class SessionState:
         self._lock = threading.Lock()
         self._sessions: OrderedDict[str, _Entry] = OrderedDict()
         self._max = max(1, max_sessions)
+        #: Incremental history, phase 1. Deliberately NOT
+        #: per session and NOT under ``_lock``: a delivered snapshot is proven
+        #: for the whole process, the sessions map is evicted on a bound this
+        #: belief must outlive, and every session's search touches these. Each
+        #: carries its own lock — the same discipline as the map, one concern
+        #: narrower, so a search never contends with a hook writing history.
+        #:
+        #: ``delivered`` holds ``(scope, snapshot_node_key)`` pairs whose context
+        #: is proven landed; ``capability`` the scopes whose backend has shown
+        #: the ``missing_snapshots`` key and therefore implements the contract guard.
+        #: Both are scoped by ``(base_url, sha256(api_key))``, because node ids
+        #: are derived from the account key server-side.
+        self.delivered = BoundedKeySet(DELIVERED_CAP)
+        self.capability = BoundedKeySet(CAPABILITY_CAP)
 
     # -- writes ------------------------------------------------------------ #
     def record_history(self, session_id: str, messages: Any) -> None:

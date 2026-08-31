@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from telem.errors import APIStatusError
 from telem.integrations._openai_trajectory import (
     parent_snapshot,
     trajectory_metadata,
@@ -25,6 +26,17 @@ from telem.integrations._openai_trajectory import (
 from telem.integrations._tools import (
     DEFAULT_RESULT_MAX_LEN,
     format_search_results as _format_results,
+)
+from telem.integrations._trajectory_v5 import (
+    CAPABILITY_CAP,
+    DELIVERED_CAP,
+    BoundedKeySet,
+    DeliveryPlan,
+    cache_scope,
+    is_missing_snapshots_refusal,
+    plan_ancestors,
+    record_delivery,
+    restore_omitted,
 )
 from telem.models import SearchResponse
 
@@ -175,6 +187,15 @@ class _WrapState:
     #: agent's current message for node keys, and its spawn point when it delegates.
     last_completion_id: str = ""
     last_completion_created: int | None = None
+    #: Incremental history, phase 1, PER WRAPPED CLIENT: the
+    #: snapshot keys whose context this wrap has proven landed, and the scopes whose
+    #: backend has proven it implements the contract guard. Both are keyed by
+    #: ``(base_url, sha256(api_key))`` — node ids are derived from the account key
+    #: server-side, so flipping either voids every belief about that world. A fresh
+    #: wrap starts cold, which costs one full re-send per snapshot: the safe
+    #: direction, and the reason this is not process-global.
+    delivered: BoundedKeySet = field(default_factory=lambda: BoundedKeySet(DELIVERED_CAP))
+    capability: BoundedKeySet = field(default_factory=lambda: BoundedKeySet(CAPABILITY_CAP))
 
 
 def _attach(obj: Any, name: str, value: Any) -> None:
@@ -250,14 +271,28 @@ def _window_id(state: _WrapState) -> str:
     return state.context_window_id or window_anchor(state.messages)
 
 
-def _search_kwargs(state: _WrapState, tool_call_id: str) -> dict[str, Any]:
+def _search_kwargs(
+    state: _WrapState, tool_call_id: str, plan: DeliveryPlan | None = None
+) -> dict[str, Any]:
     """Assemble search() keyword arguments: config defaults plus the v5 payload.
 
     No ``session`` is sent: under trajectory v5 ``session_key`` IS the session
     identity, and asserting a second one would give the backend two competing
     answers for the same question.
+
+    With a *plan*, the ancestor chain is filtered through phase-1 omission and the
+    call's promises are recorded on it. Without one the chain goes out in full —
+    which is what the helper tests and any future caller with nothing to reconcile
+    a response against should get.
     """
     config = state.config
+    ancestors = (
+        state.ancestors
+        if plan is None
+        else plan_ancestors(
+            state.ancestors, plan, delivered=state.delivered, capability=state.capability
+        )
+    )
     return {
         "tier": config.tier,
         "providers_include": config.providers_include,
@@ -270,9 +305,82 @@ def _search_kwargs(state: _WrapState, tool_call_id: str) -> dict[str, Any]:
             message_id=state.last_completion_id,
             tool_call_id=tool_call_id,
             messages=state.messages,
-            ancestors=state.ancestors,
+            ancestors=ancestors,
         ),
     }
+
+
+def _delivery_plan(state: _WrapState) -> DeliveryPlan:
+    """Open this call's phase-1 ledger against the scope the POST will actually use.
+
+    Resolved BEFORE the trajectory is built: the ``(base_url, key)`` scope
+    decides which ancestor contexts may be withheld, and that decision has to be
+    taken against the very world this request then reaches — resolving afterwards
+    could omit against one world what was only ever delivered to another. The two
+    attributes are read defensively because the wrap's ``telem`` is duck-typed.
+    """
+    return DeliveryPlan(
+        scope=cache_scope(
+            getattr(state.telem, "base_url", None), getattr(state.telem, "api_key", None)
+        )
+    )
+
+
+def _run_search(state: _WrapState, query: str, tool_call_id: str) -> SearchResponse:
+    """One search, plus the single in-call retry the guard's 409 asks for.
+
+    The retried request is the SAME kwargs object — same ``node_key`` (the message
+    and tool-call ids that derive it have not moved), same ``message_history``,
+    same search block — with ``context_omitted`` swapped back for ``context``. The
+    refusal is a PRE-EXECUTION one (nothing ran, nothing billed, nothing persisted),
+    so the retry is this call's only execution and the wrap's "a search is not
+    idempotent, never re-run it" stance is untouched in substance.
+    """
+    plan = _delivery_plan(state)
+    kwargs = _search_kwargs(state, tool_call_id, plan)
+    try:
+        response = state.telem.search(query, **kwargs)
+    except APIStatusError as error:
+        if not is_missing_snapshots_refusal(error.status_code, error.body, plan):
+            raise
+        restore_omitted(plan, delivered=state.delivered)
+        # Exactly once: `omitted` is now empty, so a second 409 cannot re-enter
+        # this branch even in principle and is surfaced like any other error.
+        response = state.telem.search(query, **kwargs)
+    _mark_delivered(state, plan, response)
+    return response
+
+
+async def _arun_search(state: _WrapState, query: str, tool_call_id: str) -> SearchResponse:
+    """The async twin of :func:`_run_search`; see it for the reasoning."""
+    plan = _delivery_plan(state)
+    kwargs = _search_kwargs(state, tool_call_id, plan)
+    try:
+        response = await state.telem.search(query, **kwargs)
+    except APIStatusError as error:
+        if not is_missing_snapshots_refusal(error.status_code, error.body, plan):
+            raise
+        restore_omitted(plan, delivered=state.delivered)
+        response = await state.telem.search(query, **kwargs)
+    _mark_delivered(state, plan, response)
+    return response
+
+
+def _mark_delivered(state: _WrapState, plan: DeliveryPlan, response: Any) -> None:
+    """Fold a proven response into the phase-1 caches.
+
+    Reached only once ``search()`` has returned, which means a 2xx whose body
+    parsed AND passed the V2 envelope gate. The gate is stricter than the spec
+    asks — a pre-V2 2xx still committed its trajectory write — but the SDK raises
+    that from inside ``search()``, so the surface simply learns nothing from it and
+    re-sends the contexts in full next call: the safe direction.
+    """
+    record_delivery(
+        plan,
+        getattr(response, "raw", None),
+        delivered=state.delivered,
+        capability=state.capability,
+    )
 
 
 def _spawned_at(created: int | None) -> str | None:
@@ -451,9 +559,7 @@ def wrap_openai(
         responses: list[SearchResponse] = []
         tool_messages: list[dict[str, Any]] = []
         for call in calls:
-            response = state.telem.search(
-                _query_from_call(call), **_search_kwargs(state, _call_id(call))
-            )
+            response = _run_search(state, _query_from_call(call), _call_id(call))
             _adopt_session_id(client, response)
             call_id = _call_id(call)
             message = _tool_message(call_id, _format_results(response, state.config.result_max_len))
@@ -481,9 +587,7 @@ def wrap_openai(
 
         def run_tool(tool_call: Any) -> dict[str, Any]:
             if _call_name(tool_call) == "telem_search":
-                response = state.telem.search(
-                    _query_from_call(tool_call), **_search_kwargs(state, _call_id(tool_call))
-                )
+                response = _run_search(state, _query_from_call(tool_call), _call_id(tool_call))
                 _adopt_session_id(client, response)
                 call_id = _call_id(tool_call)
                 message = _tool_message(
@@ -584,9 +688,7 @@ def wrap_async_openai(
         responses: list[SearchResponse] = []
         tool_messages: list[dict[str, Any]] = []
         for call in calls:
-            response = await state.telem.search(
-                _query_from_call(call), **_search_kwargs(state, _call_id(call))
-            )
+            response = await _arun_search(state, _query_from_call(call), _call_id(call))
             _adopt_session_id(client, response)
             call_id = _call_id(call)
             message = _tool_message(call_id, _format_results(response, state.config.result_max_len))
@@ -614,8 +716,8 @@ def wrap_async_openai(
 
         async def run_tool(tool_call: Any) -> dict[str, Any]:
             if _call_name(tool_call) == "telem_search":
-                response = await state.telem.search(
-                    _query_from_call(tool_call), **_search_kwargs(state, _call_id(tool_call))
+                response = await _arun_search(
+                    state, _query_from_call(tool_call), _call_id(tool_call)
                 )
                 _adopt_session_id(client, response)
                 call_id = _call_id(tool_call)

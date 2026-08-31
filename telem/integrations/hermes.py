@@ -39,10 +39,12 @@ import logging
 import os
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from telem import AsyncTelem, resolve_search_options
+from telem.errors import APIStatusError
 from telem.integrations import _hermes_state, _trajectory_v5
 from telem.integrations._hermes_render import (
     FETCH_MAX_URLS,
@@ -324,7 +326,12 @@ def _search_options() -> dict[str, Any]:
     return resolution.search_kwargs()
 
 
-def build_trajectory(kind: str, session_id: Any = None, task_id: Any = None) -> dict[str, Any]:
+def build_trajectory(
+    kind: str,
+    session_id: Any = None,
+    task_id: Any = None,
+    plan: _trajectory_v5.DeliveryPlan | None = None,
+) -> dict[str, Any]:
     """The flat trajectory-v5 metadata block for one tool call.
 
     Identity is the host's session, which keeps ``session_key`` stable across one
@@ -332,6 +339,11 @@ def build_trajectory(kind: str, session_id: Any = None, task_id: Any = None) -> 
     ancestors come from whatever the hooks have cached for this session; with no
     hook data — a search before the first API call, a host that never fired one —
     this degrades to the self-only node the plugin shipped with.
+
+    With a *plan*, the ancestor chain is filtered through incremental phase 1: an
+    ancestor whose context this process has proven delivered to the plan's scope
+    goes out as ``context_omitted`` instead, and the plan records both halves of
+    the promise. Without one the chain goes out in full.
 
     The trajectory is telemetry attached to a search, never a precondition for
     one, so a state read that goes wrong costs the history and not the call.
@@ -342,9 +354,21 @@ def build_trajectory(kind: str, session_id: Any = None, task_id: Any = None) -> 
         history = message_history(entry.messages)
         window_id: str = entry.window_id or _trajectory_v5.NONE
         ancestors = entry.ancestors
+        if plan is not None:
+            ancestors = _trajectory_v5.plan_ancestors(
+                ancestors,
+                plan,
+                delivered=_STATE.delivered,
+                capability=_STATE.capability,
+            )
     except Exception:
         logger.warning("Dropping trajectory history for this call", exc_info=True)
         history, window_id, ancestors = [], _trajectory_v5.NONE, []
+        if plan is not None:
+            # A degraded call promises nothing: it must never mark a delivery it
+            # did not make, nor ask back a context it never withheld.
+            plan.sent_with_context.clear()
+            plan.omitted.clear()
 
     return _trajectory_v5.build_metadata(
         harness=HARNESS_ID,
@@ -533,26 +557,83 @@ def _on_session_finalize(**payload: Any) -> None:
 # varies the rest (`user_task` on one, `enabled_tools` on the other), so **kwargs
 # is required rather than decorative. A raised exception becomes a tool error.
 # --------------------------------------------------------------------------- #
+def _delivery_plan(client: Any) -> _trajectory_v5.DeliveryPlan:
+    """Open this call's phase-1 ledger against the scope the request will use.
+
+    Resolved BEFORE the trajectory is built: the ``(base_url, key)`` scope
+    decides which ancestor contexts may be withheld, and that decision has to be
+    taken against the very world this request then reaches — resolving afterwards
+    could omit against one world what was only ever delivered to another. The
+    client resolves its own credentials (argument, env, ``credentials.json``), so
+    reading them off the constructed client is the only place both are settled.
+    """
+    return _trajectory_v5.DeliveryPlan(
+        scope=_trajectory_v5.cache_scope(
+            getattr(client, "base_url", None), getattr(client, "api_key", None)
+        )
+    )
+
+
+async def _send(plan: _trajectory_v5.DeliveryPlan, send: Callable[[], Awaitable[Any]]) -> Any:
+    """Run one request, honour the guard's 409 exactly once, then bank the proof.
+
+    ONE watermark for both tools: ``telem_fetch`` delivers ancestors
+    through the same backend handler, so a fetch 2xx is delivery proof and a fetch
+    may omit like a search.
+
+    The retry re-runs the SAME closure over the SAME ``metadata`` dict, whose
+    ancestor entries :func:`~telem.integrations._trajectory_v5.restore_omitted`
+    has just refilled in place — same ``node_key``s, same ``message_history``,
+    same options. The refusal is a PRE-EXECUTION one (nothing ran, nothing billed,
+    nothing persisted), so the retry is this call's only execution.
+
+    A second 409 cannot re-enter the branch: ``plan.omitted`` is empty by then, so
+    it surfaces as the tool error, which is what the contract asks for. So does a 409
+    naming a different code, and a 409 on a call that withheld nothing.
+    """
+    try:
+        response = await send()
+    except APIStatusError as error:
+        if not _trajectory_v5.is_missing_snapshots_refusal(error.status_code, error.body, plan):
+            raise
+        _trajectory_v5.restore_omitted(plan, delivered=_STATE.delivered)
+        response = await send()
+    # Only here, never at send time: a 2xx whose body parsed into a real
+    # response is what proves the contexts landed. `raw` is the parsed body, so
+    # the capability probe reads KEY PRESENCE off exactly what the server sent.
+    _trajectory_v5.record_delivery(
+        plan,
+        getattr(response, "raw", None),
+        delivered=_STATE.delivered,
+        capability=_STATE.capability,
+    )
+    return response
+
+
 async def telem_search(args: dict, **kwargs: Any) -> str:
     queries = normalize_queries((args or {}).get("queries"))
     goal = ((args or {}).get("goal") or "").strip() or None
     options = _search_options()
-    metadata = build_trajectory("search", kwargs.get("session_id"), kwargs.get("task_id"))
 
     async with AsyncTelem() as client:
+        plan = _delivery_plan(client)
+        metadata = build_trajectory("search", kwargs.get("session_id"), kwargs.get("task_id"), plan)
         # A one-element sequence sends the same `{"query": ...}` body as a plain
         # string, so the batch and single paths need no branch here.
-        response = await client.search(queries, goal=goal, metadata=metadata, **options)
+        response = await _send(
+            plan, lambda: client.search(queries, goal=goal, metadata=metadata, **options)
+        )
     return wrap_untrusted("telem_search", render_search(response))
 
 
 async def telem_fetch(args: dict, **kwargs: Any) -> str:
     urls = normalize_urls((args or {}).get("urls"))
     await assert_urls_safe(urls)
-    metadata = build_trajectory("fetch", kwargs.get("session_id"), kwargs.get("task_id"))
 
     async with AsyncTelem() as client:
-        response = await client.fetch(urls, metadata=metadata)
+        plan = _delivery_plan(client)
+        metadata = build_trajectory("fetch", kwargs.get("session_id"), kwargs.get("task_id"), plan)
+        response = await _send(plan, lambda: client.fetch(urls, metadata=metadata))
     return wrap_untrusted("telem_fetch", render_fetch(response))
 
 
