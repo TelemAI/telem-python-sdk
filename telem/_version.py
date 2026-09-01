@@ -13,4 +13,4 @@ one-line change; if you are editing a version string anywhere else, something ha
 regressed back to the shape that caused that.
 """
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
