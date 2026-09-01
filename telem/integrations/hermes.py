@@ -45,7 +45,7 @@ from urllib.parse import unquote, urlsplit
 
 from telem import AsyncTelem, resolve_search_options
 from telem.errors import APIStatusError
-from telem.integrations import _hermes_state, _trajectory_v5
+from telem.integrations import _hermes_state, _trajectory_v5, _update_advisory
 from telem.integrations._hermes_render import (
     FETCH_MAX_URLS,
     render_fetch,
@@ -607,6 +607,7 @@ async def _send(plan: _trajectory_v5.DeliveryPlan, send: Callable[[], Awaitable[
         delivered=_STATE.delivered,
         capability=_STATE.capability,
     )
+    _update_advisory.maybe_warn(_update_advisory.recommended_map(response), logger.warning)
     return response
 
 

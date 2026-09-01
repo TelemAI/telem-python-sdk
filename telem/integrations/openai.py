@@ -18,6 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 from telem.errors import APIStatusError
+from telem.integrations import _update_advisory
 from telem.integrations._openai_trajectory import (
     parent_snapshot,
     trajectory_metadata,
@@ -348,6 +349,7 @@ def _run_search(state: _WrapState, query: str, tool_call_id: str) -> SearchRespo
         # this branch even in principle and is surfaced like any other error.
         response = state.telem.search(query, **kwargs)
     _mark_delivered(state, plan, response)
+    _update_advisory.maybe_warn(_update_advisory.recommended_map(response), warnings.warn)
     return response
 
 
@@ -363,6 +365,7 @@ async def _arun_search(state: _WrapState, query: str, tool_call_id: str) -> Sear
         restore_omitted(plan, delivered=state.delivered)
         response = await state.telem.search(query, **kwargs)
     _mark_delivered(state, plan, response)
+    _update_advisory.maybe_warn(_update_advisory.recommended_map(response), warnings.warn)
     return response
 
 
