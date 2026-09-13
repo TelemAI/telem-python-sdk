@@ -51,6 +51,14 @@ def _flag_env(name: str) -> bool | None:
     return True if os.environ.get(name) == "1" else None
 
 
+def _int_env(name: str) -> int | None:
+    """Parse an integer env var, or ``None`` when it is unset or not an integer."""
+    try:
+        return int(os.environ.get(name, ""))
+    except ValueError:
+        return None
+
+
 class BaseClient:
     """Holds resolved configuration shared by the sync and async clients."""
 
@@ -66,6 +74,9 @@ class BaseClient:
         default_providers_include: list[str] | None = None,
         default_providers_exclude: list[str] | None = None,
         default_include_full_content: bool | None = None,
+        default_auto_routing: str | None = None,
+        default_max_routing_providers: int | None = None,
+        default_topic: str | None = None,
     ) -> None:
         # Credentials: argument, else env var, else ``~/.telem/credentials.json`` — the
         # file the wizard/`--login` writes, so an installed user never has to export
@@ -109,6 +120,21 @@ class BaseClient:
             if default_include_full_content is not None
             else _flag_env("TELEM_FULL_CONTENT")
         )
+        self.default_auto_routing = (
+            default_auto_routing
+            if default_auto_routing is not None
+            else ((os.environ.get("TELEM_AUTO_ROUTING") or "").strip() or None)
+        )
+        self.default_max_routing_providers = (
+            default_max_routing_providers
+            if default_max_routing_providers is not None
+            else _int_env("TELEM_MAX_ROUTING_PROVIDERS")
+        )
+        self.default_topic = (
+            default_topic
+            if default_topic is not None
+            else ((os.environ.get("TELEM_TOPIC") or "").strip() or None)
+        )
 
     def _headers(self) -> dict[str, str]:
         """Build the default request headers, adding Bearer auth only when an api_key is set."""
@@ -135,6 +161,9 @@ class BaseClient:
         num_results: int | None,
         include_raw: bool | None,
         include_full_content: bool | None,
+        auto_routing: str | None = None,
+        max_routing_providers: int | None = None,
+        topic: str | None = None,
     ) -> dict[str, Any]:
         """Resolve call arguments against the client defaults into the wire ``search`` block.
 
@@ -199,6 +228,18 @@ class BaseClient:
             block["include_raw"] = include_raw
         if include_full_content is not None:
             block["include_full_content"] = include_full_content
+        if auto_routing is None:
+            auto_routing = self.default_auto_routing
+        if auto_routing is not None:
+            block["auto_routing"] = auto_routing
+        if max_routing_providers is None:
+            max_routing_providers = self.default_max_routing_providers
+        if max_routing_providers is not None:
+            block["max_routing_providers"] = max_routing_providers
+        if topic is None:
+            topic = self.default_topic
+        if topic is not None:
+            block["topic"] = topic
         return block
 
     def _search_body(
@@ -213,6 +254,9 @@ class BaseClient:
         num_results: int | None = None,
         include_raw: bool | None = None,
         include_full_content: bool | None = None,
+        auto_routing: str | None = None,
+        max_routing_providers: int | None = None,
+        topic: str | None = None,
         goal: str | None = None,
         context: str | None = None,
         session: str | None = None,
@@ -271,6 +315,9 @@ class BaseClient:
             num_results=num_results,
             include_raw=include_raw,
             include_full_content=include_full_content,
+            auto_routing=auto_routing,
+            max_routing_providers=max_routing_providers,
+            topic=topic,
         )
         if search:
             body["search"] = search

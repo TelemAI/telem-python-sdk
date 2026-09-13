@@ -34,6 +34,9 @@ class AsyncTelem(BaseClient):
         default_providers_include: list[str] | None = None,
         default_providers_exclude: list[str] | None = None,
         default_include_full_content: bool | None = None,
+        default_auto_routing: str | None = None,
+        default_max_routing_providers: int | None = None,
+        default_topic: str | None = None,
     ) -> None:
         """Create an asynchronous Telem client.
 
@@ -53,6 +56,10 @@ class AsyncTelem(BaseClient):
                 ``TELEM_PROVIDERS_EXCLUDE`` (csv).
             default_include_full_content: Default full-content flag. Falls back to
                 ``TELEM_FULL_CONTENT`` (only ``"1"`` enables it).
+            default_auto_routing: Default routing mode. Falls back to ``TELEM_AUTO_ROUTING``.
+            default_max_routing_providers: Default routed provider count. Falls back to
+                ``TELEM_MAX_ROUTING_PROVIDERS``.
+            default_topic: Default topic name. Falls back to ``TELEM_TOPIC``.
         """
         super().__init__(
             api_key,
@@ -64,6 +71,9 @@ class AsyncTelem(BaseClient):
             default_providers_include=default_providers_include,
             default_providers_exclude=default_providers_exclude,
             default_include_full_content=default_include_full_content,
+            default_auto_routing=default_auto_routing,
+            default_max_routing_providers=default_max_routing_providers,
+            default_topic=default_topic,
         )
         self._client = httpx.AsyncClient(timeout=timeout, headers=self._headers())
         self._sessions = AsyncSessionsResource(self)
@@ -96,6 +106,9 @@ class AsyncTelem(BaseClient):
         num_results: int | None = None,
         include_raw: bool | None = None,
         include_full_content: bool | None = None,
+        auto_routing: str | None = None,
+        max_routing_providers: int | None = None,
+        topic: str | None = None,
         goal: str | None = None,
         context: str | None = None,
         session: str | None = None,
@@ -122,6 +135,9 @@ class AsyncTelem(BaseClient):
             num_results: Results per provider (server default 5).
             include_raw: Ask the server to attach each provider's raw payload.
             include_full_content: Ask providers for full page content.
+            auto_routing: Routing mode (``"accuracy"``).
+            max_routing_providers: How many providers a routed query uses.
+            topic: Topic name for the query.
             goal: Optional agent goal, merged into request metadata.
             context: Optional context string, merged into request metadata.
             session: Optional session id to continue an existing session.
@@ -140,6 +156,9 @@ class AsyncTelem(BaseClient):
             num_results=num_results,
             include_raw=include_raw,
             include_full_content=include_full_content,
+            auto_routing=auto_routing,
+            max_routing_providers=max_routing_providers,
+            topic=topic,
             goal=goal,
             context=context,
             session=session,
