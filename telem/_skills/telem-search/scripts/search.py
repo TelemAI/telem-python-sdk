@@ -111,6 +111,9 @@ def main() -> None:
     parser.add_argument("--session", default=None, help="session id from a previous search")
     parser.add_argument("--goal", default=None, help="the current task (first search only)")
     parser.add_argument(
+        "--topic", default=None, help="one site to search: linkedin, reddit or x (twitter)"
+    )
+    parser.add_argument(
         "--providers",
         default=None,
         help="comma-separated provider names (default: the Telem config, else server picks)",
@@ -126,12 +129,18 @@ def main() -> None:
     max_len = args.max_len if args.max_len > 0 else 8000
     query = args.queries[0] if len(args.queries) == 1 else args.queries
 
+    topic = (args.topic or "").strip() or None
+
     try:
-        response = Telem().search(
+        client = Telem()
+        response = client.search(
             query,
             # Continuation calls: the backend already knows the session's goal.
             goal=None if args.session else args.goal,
             session=args.session,
+            # A --topic beats TELEM_TOPIC. The routing mode comes from the config's
+            # autoRouting key or TELEM_AUTO_ROUTING, never from this flag.
+            topic=topic,
             # Call-level, so a config file outranks the client's env-derived defaults.
             **search_options(providers),
         )

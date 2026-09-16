@@ -18,7 +18,12 @@ except ImportError as exc:  # pragma: no cover - exercised only without the opti
 from telem.async_client import AsyncTelem
 from telem.client import Telem
 from telem.integrations._langchain_trajectory import create_child_config, trajectory_metadata
-from telem.integrations._tools import DEFAULT_RESULT_MAX_LEN, format_search_results
+from telem.integrations._tools import (
+    DEFAULT_RESULT_MAX_LEN,
+    TOPIC_DESCRIPTION,
+    format_search_results,
+    topic_search_kwargs,
+)
 from telem.models import SearchResponse
 
 _DEFAULT_DESCRIPTION = "Search the web for relevant, up-to-date information."
@@ -30,6 +35,7 @@ class TelemSearchInput(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     query: str = Field(description="The query to search for.")
+    topic: str | None = Field(default=None, description=TOPIC_DESCRIPTION)
     runtime: ToolRuntime = Field(default=None)  # type: ignore[assignment]
 
 
@@ -75,7 +81,9 @@ def create_telem_search_tool(
 ) -> BaseTool:
     """Create a LangChain tool backed by a Telem client.
 
-    Only ``query`` is exposed to the model. All other arguments are application-owned
+    Only ``query`` and an optional ``topic`` are exposed to the model; a non-blank
+    ``topic`` beats ``TELEM_TOPIC``. The routing mode is never taken from the model.
+    All other arguments are application-owned
     policy forwarded to every :meth:`Telem.search` call. The tool's model-facing content
     is a compact text rendering; its LangChain artifact is the typed
     :class:`SearchResponse`.
@@ -119,9 +127,12 @@ def create_telem_search_tool(
 
         async def async_search(
             query: str,
+            topic: str | None = None,
             runtime: ToolRuntime = None,  # type: ignore[assignment]
         ) -> tuple[str, SearchResponse]:
-            response = await client.search(query, **runtime_search_kwargs(runtime))
+            response = await client.search(
+                query, **topic_search_kwargs(topic), **runtime_search_kwargs(runtime)
+            )
             return format_search_results(response, result_max_len), response
 
         return StructuredTool.from_function(
@@ -138,9 +149,12 @@ def create_telem_search_tool(
 
         def search(
             query: str,
+            topic: str | None = None,
             runtime: ToolRuntime = None,  # type: ignore[assignment]
         ) -> tuple[str, SearchResponse]:
-            response = client.search(query, **runtime_search_kwargs(runtime))
+            response = client.search(
+                query, **topic_search_kwargs(topic), **runtime_search_kwargs(runtime)
+            )
             return format_search_results(response, result_max_len), response
 
         return StructuredTool.from_function(

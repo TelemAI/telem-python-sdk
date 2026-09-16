@@ -135,7 +135,7 @@ class Telem(BaseClient):
             num_results: Results per provider (server default 5).
             include_raw: Ask the server to attach each provider's raw payload.
             include_full_content: Ask providers for full page content.
-            auto_routing: Routing mode (``"accuracy"``).
+            auto_routing: Routing mode: ``"accuracy"``, ``"latency"`` or ``"search_cost"``.
             max_routing_providers: How many providers a routed query uses.
             topic: Topic name for the query.
             goal: Optional agent goal, merged into request metadata.

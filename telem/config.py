@@ -65,6 +65,7 @@ _SEARCH_KWARGS: Mapping[str, str] = MappingProxyType(
         "providersExclude": "providers_exclude",
         "fullContent": "include_full_content",
         "providerOverrides": "provider_overrides",
+        "autoRouting": "auto_routing",
     }
 )
 

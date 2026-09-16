@@ -182,7 +182,12 @@ TELEM_OPTIONS: tuple[OptionSpec, ...] = (
     OptionSpec("providersExclude", "array", "nameList", "TELEM_PROVIDERS_EXCLUDE", ()),
     OptionSpec("fullContent", "boolean", "flag", "TELEM_FULL_CONTENT", ()),
     OptionSpec("providerOverrides", "object", "overridesMap", None, ()),
+    OptionSpec("autoRouting", "string", "name", "TELEM_AUTO_ROUTING", ()),
 )
+
+#: The one key whose environment variable outranks the files. Every other key is
+#: file-beats-env; this exception is pinned by the shared corpus.
+ENV_FIRST_KEYS = frozenset({"autoRouting"})
 
 TELEM_OPTION_KEYS: tuple[str, ...] = tuple(option.key for option in TELEM_OPTIONS)
 
@@ -418,7 +423,13 @@ def resolve_options(env: Env, project_root: str | None = None) -> Resolution:
         coerce = COERCERS[spec.coercion]
         resolved: Any = None
         level: str | None = None
+        if spec.key in ENV_FIRST_KEYS:
+            from_env_first = option_from_env(spec, env)
+            if from_env_first is not None:
+                resolved, level = from_env_first, "env"
         for layer_level, data in layers:
+            if level is not None:
+                break
             if not data or spec.key not in data:
                 continue
             candidate = coerce(data[spec.key])

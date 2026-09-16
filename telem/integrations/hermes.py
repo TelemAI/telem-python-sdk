@@ -46,6 +46,7 @@ from urllib.parse import unquote, urlsplit
 from telem import AsyncTelem, resolve_search_options
 from telem.errors import APIStatusError
 from telem.integrations import _hermes_state, _trajectory_v5, _update_advisory
+from telem.integrations._tools import TOPIC_DESCRIPTION, topic_search_kwargs
 from telem.integrations._hermes_render import (
     FETCH_MAX_URLS,
     render_fetch,
@@ -155,6 +156,7 @@ SEARCH_SCHEMA: dict[str, Any] = {
                     "step in the trajectory: send it on every search where you know the task."
                 ),
             },
+            "topic": {"type": "string", "description": TOPIC_DESCRIPTION},
         },
         "required": ["queries"],
     },
@@ -614,6 +616,7 @@ async def _send(plan: _trajectory_v5.DeliveryPlan, send: Callable[[], Awaitable[
 async def telem_search(args: dict, **kwargs: Any) -> str:
     queries = normalize_queries((args or {}).get("queries"))
     goal = ((args or {}).get("goal") or "").strip() or None
+    topic = (args or {}).get("topic")
     options = _search_options()
 
     async with AsyncTelem() as client:
@@ -622,7 +625,14 @@ async def telem_search(args: dict, **kwargs: Any) -> str:
         # A one-element sequence sends the same `{"query": ...}` body as a plain
         # string, so the batch and single paths need no branch here.
         response = await _send(
-            plan, lambda: client.search(queries, goal=goal, metadata=metadata, **options)
+            plan,
+            lambda: client.search(
+                queries,
+                goal=goal,
+                metadata=metadata,
+                **topic_search_kwargs(topic),
+                **options,
+            ),
         )
     return wrap_untrusted("telem_search", render_search(response))
 

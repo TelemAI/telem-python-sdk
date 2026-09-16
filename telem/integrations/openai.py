@@ -26,8 +26,10 @@ from telem.integrations._openai_trajectory import (
 )
 from telem.integrations._tools import (
     DEFAULT_RESULT_MAX_LEN,
-    format_search_results as _format_results,
+    TOPIC_DESCRIPTION,
+    topic_search_kwargs,
 )
+from telem.integrations._tools import format_search_results as _format_results
 from telem.integrations._trajectory_v5 import (
     CAPABILITY_CAP,
     DELIVERED_CAP,
@@ -50,6 +52,7 @@ TELEM_SEARCH_TOOL: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "The query to search for."},
+                "topic": {"type": "string", "description": TOPIC_DESCRIPTION},
             },
             "required": ["query"],
         },
@@ -127,10 +130,23 @@ def _call_name(call: Any) -> str:
     return function.get("name", "") if isinstance(function, dict) else function.name
 
 
+def _call_arguments(call: Any) -> Any:
+    """Return the raw JSON arguments of a function tool call."""
+    function = (call.get("function") or {}) if isinstance(call, dict) else call.function
+    return function.get("arguments", "") if isinstance(function, dict) else function.arguments
+
+
+def _topic_from_call(call: Any) -> Any:
+    """The raw per-call ``topic`` argument, or None when the arguments carry none."""
+    try:
+        return json.loads(_call_arguments(call)).get("topic")
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def _query_from_call(call: Any) -> str:
     """Extract the query string from a telem_search tool call's JSON arguments."""
-    function = (call.get("function") or {}) if isinstance(call, dict) else call.function
-    arguments = function.get("arguments", "") if isinstance(function, dict) else function.arguments
+    arguments = _call_arguments(call)
     try:
         query = json.loads(arguments)["query"]
     except (ValueError, KeyError, TypeError) as exc:
@@ -327,7 +343,9 @@ def _delivery_plan(state: _WrapState) -> DeliveryPlan:
     )
 
 
-def _run_search(state: _WrapState, query: str, tool_call_id: str) -> SearchResponse:
+def _run_search(
+    state: _WrapState, query: str, tool_call_id: str, topic: Any = None
+) -> SearchResponse:
     """One search, plus the single in-call retry the guard's 409 asks for.
 
     The retried request is the SAME kwargs object — same ``node_key`` (the message
@@ -339,6 +357,7 @@ def _run_search(state: _WrapState, query: str, tool_call_id: str) -> SearchRespo
     """
     plan = _delivery_plan(state)
     kwargs = _search_kwargs(state, tool_call_id, plan)
+    kwargs.update(topic_search_kwargs(topic))
     try:
         response = state.telem.search(query, **kwargs)
     except APIStatusError as error:
@@ -353,10 +372,13 @@ def _run_search(state: _WrapState, query: str, tool_call_id: str) -> SearchRespo
     return response
 
 
-async def _arun_search(state: _WrapState, query: str, tool_call_id: str) -> SearchResponse:
+async def _arun_search(
+    state: _WrapState, query: str, tool_call_id: str, topic: Any = None
+) -> SearchResponse:
     """The async twin of :func:`_run_search`; see it for the reasoning."""
     plan = _delivery_plan(state)
     kwargs = _search_kwargs(state, tool_call_id, plan)
+    kwargs.update(topic_search_kwargs(topic))
     try:
         response = await state.telem.search(query, **kwargs)
     except APIStatusError as error:
@@ -562,7 +584,9 @@ def wrap_openai(
         responses: list[SearchResponse] = []
         tool_messages: list[dict[str, Any]] = []
         for call in calls:
-            response = _run_search(state, _query_from_call(call), _call_id(call))
+            response = _run_search(
+                state, _query_from_call(call), _call_id(call), _topic_from_call(call)
+            )
             _adopt_session_id(client, response)
             call_id = _call_id(call)
             message = _tool_message(call_id, _format_results(response, state.config.result_max_len))
@@ -590,7 +614,12 @@ def wrap_openai(
 
         def run_tool(tool_call: Any) -> dict[str, Any]:
             if _call_name(tool_call) == "telem_search":
-                response = _run_search(state, _query_from_call(tool_call), _call_id(tool_call))
+                response = _run_search(
+                    state,
+                    _query_from_call(tool_call),
+                    _call_id(tool_call),
+                    _topic_from_call(tool_call),
+                )
                 _adopt_session_id(client, response)
                 call_id = _call_id(tool_call)
                 message = _tool_message(
@@ -691,7 +720,9 @@ def wrap_async_openai(
         responses: list[SearchResponse] = []
         tool_messages: list[dict[str, Any]] = []
         for call in calls:
-            response = await _arun_search(state, _query_from_call(call), _call_id(call))
+            response = await _arun_search(
+                state, _query_from_call(call), _call_id(call), _topic_from_call(call)
+            )
             _adopt_session_id(client, response)
             call_id = _call_id(call)
             message = _tool_message(call_id, _format_results(response, state.config.result_max_len))
@@ -720,7 +751,10 @@ def wrap_async_openai(
         async def run_tool(tool_call: Any) -> dict[str, Any]:
             if _call_name(tool_call) == "telem_search":
                 response = await _arun_search(
-                    state, _query_from_call(tool_call), _call_id(tool_call)
+                    state,
+                    _query_from_call(tool_call),
+                    _call_id(tool_call),
+                    _topic_from_call(tool_call),
                 )
                 _adopt_session_id(client, response)
                 call_id = _call_id(tool_call)
