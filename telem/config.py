@@ -52,6 +52,10 @@ __all__ = ["SearchOptionsResolution", "resolve_search_options"]
 #: vocabularies meet: the config file speaks the cross-harness names of the contract, the
 #: SDK speaks Python. Both ends are pinned by tests.
 #:
+#: Its keys are also the SEARCH keys: the option table carries three fetch keys
+#: (``fetchProviders``, ``fetchTier``, ``fetchNoCache``) that a search never sends, and
+#: :func:`resolve_search_options` keeps only the keys named here.
+#:
 #: Private and frozen on purpose. It is the implementation of
 #: :meth:`SearchOptionsResolution.search_kwargs`, not a table callers should read or
 #: extend — a caller who mutated it would silently re-route every later resolution in
@@ -86,8 +90,10 @@ class SearchOptionsResolution:
     because they are about to be serialized as the request body.)
     """
 
-    #: Only the keys that resolved, under the contract names (``providersInclude``, …).
-    #: An absent key is simply not present — never ``None``.
+    #: Only the SEARCH keys that resolved, under the contract names (``providersInclude``,
+    #: …). An absent key is simply not present — never ``None``. The fetch keys of the
+    #: same table (``fetchProviders``, ``fetchTier``, ``fetchNoCache``) are never here:
+    #: this is a search's resolution.
     values: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     #: ``"call"`` | ``"project"`` | ``"user"`` | ``"env"`` per resolved key, keyed like
     #: ``values``. Recorded BEFORE the composition rules, so a key dropped by the
@@ -152,8 +158,11 @@ def resolve_search_options(
         # "read the config" into "the tool call failed".
         return SearchOptionsResolution(warnings=(f"[telem] ignoring the Telem config: {error}",))
 
-    values = dict(resolution.values)
-    sources = dict(resolution.sources)
+    # Search keys only, in BOTH mappings (they are keyed alike): the reader resolves the
+    # whole table, fetch keys included, and a fetch key left here has no kwarg in
+    # `search_kwargs()`, which would raise KeyError for every caller whose config set one.
+    values = {key: value for key, value in resolution.values.items() if key in _SEARCH_KWARGS}
+    sources = {key: level for key, level in resolution.sources.items() if key in _SEARCH_KWARGS}
     warnings = list(resolution.warnings)
 
     selected = [

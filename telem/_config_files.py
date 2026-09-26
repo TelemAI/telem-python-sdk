@@ -170,9 +170,10 @@ class OptionSpec(NamedTuple):
     env_aliases: tuple[str, ...]
 
 
-#: The six option keys of the contract, in the TS table's order. Descriptions live on the TS
-#: side only — they are interview/schema copy, and duplicating prose is how prose drifts;
-#: its own suite pins this table against the generated schema.
+#: The option keys, in the TS table's order: the search keys, then the three fetch keys.
+#: Descriptions live on the TS side only — they are interview/schema copy, and duplicating
+#: prose is how prose drifts; its own suite pins this table against
+#: the generated schema.
 TELEM_OPTIONS: tuple[OptionSpec, ...] = (
     OptionSpec("tier", "string", "name", "TELEM_TIER", ()),
     OptionSpec("fields", "array", "nameList", "TELEM_FIELDS", ()),
@@ -183,6 +184,9 @@ TELEM_OPTIONS: tuple[OptionSpec, ...] = (
     OptionSpec("fullContent", "boolean", "flag", "TELEM_FULL_CONTENT", ()),
     OptionSpec("providerOverrides", "object", "overridesMap", None, ()),
     OptionSpec("autoRouting", "string", "name", "TELEM_AUTO_ROUTING", ()),
+    OptionSpec("fetchProviders", "array", "nameList", "TELEM_FETCH_PROVIDERS", ()),
+    OptionSpec("fetchTier", "string", "name", "TELEM_FETCH_TIER", ()),
+    OptionSpec("fetchNoCache", "boolean", "flag", "TELEM_FETCH_NO_CACHE", ()),
 )
 
 #: The one key whose environment variable outranks the files. Every other key is
