@@ -51,13 +51,13 @@ def _opt_out() -> bool:
     return (os.environ.get(_OPT_OUT_ENV) or "").strip() == "1"
 
 
-def _message(recommended: str) -> str:
-    """The maintainer-facing advisory naming the recommended version and command."""
-    return (
-        f"A newer telem-sdk is available: {recommended} "
-        f"(installed {_version.__version__}); bump your telem-sdk pin. "
-        f"{_SDK_UPDATE_COMMAND}"
-    )
+#: What a maintainer who pins ``telem-sdk`` themselves should do.
+PIN_INSTRUCTION = f"bump your telem-sdk pin. {_SDK_UPDATE_COMMAND}"
+
+
+def _message(recommended: str, instruction: str) -> str:
+    """The maintainer-facing advisory naming the recommended version and what to do."""
+    return f"A newer telem-sdk is available: {recommended} (installed {_version.__version__}); {instruction}"
 
 
 def recommended_map(response: Any) -> dict[str, Any] | None:
@@ -78,7 +78,11 @@ def recommended_map(response: Any) -> dict[str, Any] | None:
     return recommended if isinstance(recommended, dict) else None
 
 
-def maybe_warn(recommended: dict[str, Any] | None, emit: Callable[[str], None]) -> None:
+def maybe_warn(
+    recommended: dict[str, Any] | None,
+    emit: Callable[[str], None],
+    instruction: str = PIN_INSTRUCTION,
+) -> None:
     """Emit the update advisory on ``emit`` if this build is behind, at most once.
 
     ``recommended`` is the advisory's recommended-version map; the installed SDK
@@ -87,6 +91,8 @@ def maybe_warn(recommended: dict[str, Any] | None, emit: Callable[[str], None]) 
     equal-or-newer build, and on any recommended version already advised in this
     process. ``emit`` is the caller's own developer channel -- a warning for
     openai, a log call for hermes -- and is never the text a model reads.
+    ``instruction`` says how to update on that host: a pip pin by default, the
+    host's own plugin command where the host owns the environment.
     """
     if _opt_out():
         return
@@ -107,6 +113,6 @@ def maybe_warn(recommended: dict[str, Any] | None, emit: Callable[[str], None]) 
     # The version is already recorded as advised above, so a raising channel still
     # dedups once-per-process.
     try:
-        emit(_message(version))
+        emit(_message(version, instruction))
     except Exception:
         pass

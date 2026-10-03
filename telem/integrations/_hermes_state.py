@@ -46,8 +46,17 @@ class Trajectory(NamedTuple):
     ancestors: list[dict[str, Any]]
 
 
+def _extends(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> bool:
+    """True when *new* is *old* with messages appended and nothing earlier changed.
+
+    Hermes keeps its message dicts across calls, so identity settles almost every
+    row; equality covers a row rebuilt with the same content.
+    """
+    return len(new) >= len(old) and all(a is b or a == b for a, b in zip(old, new))
+
+
 class _Entry:
-    __slots__ = ("messages", "window_id", "ancestors", "baseline")
+    __slots__ = ("messages", "window_id", "ancestors", "snapshot")
 
     def __init__(self, window_id: str) -> None:
         self.messages: list[dict[str, Any]] = []
@@ -56,12 +65,12 @@ class _Entry:
         #: :meth:`SessionState._next_window`.
         self.window_id = window_id
         self.ancestors: list[dict[str, Any]] = []
-        #: Length of the last ``pre_api_request`` snapshot — what the compaction
-        #: check compares against. ``len(self.messages)`` cannot serve once
+        #: The last ``pre_api_request`` snapshot — what the compaction check
+        #: compares against. ``self.messages`` cannot serve once
         #: :meth:`SessionState.append_message` has added the in-flight assistant
         #: turn: the next retry re-delivers the *pre*-append list, so every retry
         #: would read as a compaction and burn a generation.
-        self.baseline = 0
+        self.snapshot: list[dict[str, Any]] = []
 
 
 class SessionState:
@@ -88,12 +97,13 @@ class SessionState:
 
     # -- writes ------------------------------------------------------------ #
     def record_history(self, session_id: str, messages: Any) -> None:
-        """Replace this session's history; a *shorter* list starts a new window.
+        """Replace this session's history; a list that rewrites the last one starts a new window.
 
         Overwrite, never append: ``pre_api_request`` fires once per API call and
-        again on every retry. The length drop is the only compaction signal a
-        plugin gets — in-place compaction swaps the live message set for a
-        shorter one and fires no hook, only an event callback we cannot reach.
+        again on every retry. A rewrite is the only compaction signal a plugin
+        gets — in-place compaction swaps the live message set and fires no hook,
+        only an event callback we cannot reach. Length alone misses it: a small
+        compaction plus the next user turn can land on the old length or above.
         """
         rows = (
             [row for row in messages if isinstance(row, dict)] if isinstance(messages, list) else []
@@ -102,9 +112,9 @@ class SessionState:
             entry = self._touch(session_id)
             if entry is None:
                 return
-            if len(rows) < entry.baseline:
+            if not _extends(entry.snapshot, rows):
                 entry.window_id = self._next_window()
-            entry.baseline = len(rows)
+            entry.snapshot = rows
             entry.messages = rows
 
     def append_message(self, session_id: str, message: dict[str, Any]) -> None:
@@ -118,7 +128,7 @@ class SessionState:
         here on ``post_api_request`` is what makes a tool's snapshot match what
         the model could actually see when it called the tool.
 
-        The baseline is deliberately left alone: it tracks what the *hook*
+        The snapshot is deliberately left alone: it tracks what the *hook*
         delivered, so a retry re-delivering the pre-append list is not mistaken
         for a compaction.
         """

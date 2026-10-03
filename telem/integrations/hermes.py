@@ -1,9 +1,10 @@
 """Hermes Agent plugin: ``telem_search`` and ``telem_fetch``.
 
-Hermes discovers this module through the ``hermes_agent.plugins`` entry point,
-imports it, and calls :func:`register`. Every Hermes-only API is imported lazily
-from inside a function, so ``import telem`` never acquires a Hermes dependency
-and the SDK's Python 3.10 floor is unaffected.
+Hermes loads the ``telem`` directory plugin (``hermes-plugin-telem/``, installed
+with ``hermes plugins install``), whose ``__init__`` re-exports :func:`register`
+from here. Every Hermes-only API is imported lazily from inside a function, so
+``import telem`` never acquires a Hermes dependency and the SDK's Python 3.10
+floor is unaffected.
 
 Two things this plugin must do for itself, because Hermes keys them off a fixed
 set of built-in tool names with no seam a plugin can register into:
@@ -67,6 +68,10 @@ logger = logging.getLogger(__name__)
 
 HARNESS_ID = "hermes"
 TOOLSET = "telem"
+
+#: Hermes owns the Python environment and installs ``telem-sdk`` from the plugin's
+#: own ``pyproject.toml``, so the user updates the plugin, never a pip pin.
+UPDATE_INSTRUCTION = "update the Telem Hermes plugin with: hermes plugins update telem"
 
 # The text below is what makes the model reach for these tools, so it is wired
 # the way Hermes actually reads it.
@@ -609,7 +614,9 @@ async def _send(plan: _trajectory_v5.DeliveryPlan, send: Callable[[], Awaitable[
         delivered=_STATE.delivered,
         capability=_STATE.capability,
     )
-    _update_advisory.maybe_warn(_update_advisory.recommended_map(response), logger.warning)
+    _update_advisory.maybe_warn(
+        _update_advisory.recommended_map(response), logger.warning, UPDATE_INSTRUCTION
+    )
     return response
 
 

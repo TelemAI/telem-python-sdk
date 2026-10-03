@@ -26,13 +26,6 @@ openai = ["openai>=1"]
 [project.scripts]
 telem-install-skill = "telem.install_skill:main"
 
-# Hermes Agent discovers plugins through this group, loads the module, and calls
-# its `register` attribute — so the value is a bare MODULE, never `module:attr`.
-# Nothing else is needed: Hermes synthesizes the plugin manifest from the entry
-# point itself, and importing this module does not import Hermes.
-[project.entry-points."hermes_agent.plugins"]
-telem = "telem.integrations.hermes"
-
 [dependency-groups]
 dev = [
   "langchain>=1",
