@@ -230,7 +230,9 @@ class BaseClient:
             block["include_full_content"] = include_full_content
         if auto_routing is None:
             auto_routing = self.default_auto_routing
-        if auto_routing is not None:
+        # "off" (any case) means do not route: the router answers 422 for it as a
+        # mode, and a per-call "off" also overrides a default mode.
+        if auto_routing is not None and auto_routing.lower() != "off":
             block["auto_routing"] = auto_routing
         if max_routing_providers is None:
             max_routing_providers = self.default_max_routing_providers

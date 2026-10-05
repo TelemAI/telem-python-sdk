@@ -447,6 +447,10 @@ def resolve_options(env: Env, project_root: str | None = None) -> Resolution:
         if level is not None:
             values[spec.key] = resolved
             sources[spec.key] = level
+    # config-core's dropAutoRoutingOff: "off" (any case) wins precedence like any
+    # value, then resolves to absent — the router answers 422 for it as a mode.
+    if str(values.get("autoRouting", "")).lower() == "off":
+        del values["autoRouting"], sources["autoRouting"]
 
     return Resolution(values, sources, warnings, telem_dir.path)
 
