@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
+from datetime import date, datetime
 from typing import Any
 
 import httpx
@@ -164,6 +165,8 @@ class BaseClient:
         auto_routing: str | None = None,
         max_routing_providers: int | None = None,
         topic: str | None = None,
+        published_after: str | date | None = None,
+        published_before: str | date | None = None,
     ) -> dict[str, Any]:
         """Resolve call arguments against the client defaults into the wire ``search`` block.
 
@@ -242,6 +245,11 @@ class BaseClient:
             topic = self.default_topic
         if topic is not None:
             block["topic"] = topic
+        # Per call only: no client default, since a fixed window goes stale.
+        if published_after is not None:
+            block["published_after"] = _iso(published_after)
+        if published_before is not None:
+            block["published_before"] = _iso(published_before)
         return block
 
     def _search_body(
@@ -259,6 +267,8 @@ class BaseClient:
         auto_routing: str | None = None,
         max_routing_providers: int | None = None,
         topic: str | None = None,
+        published_after: str | date | None = None,
+        published_before: str | date | None = None,
         goal: str | None = None,
         context: str | None = None,
         session: str | None = None,
@@ -320,6 +330,8 @@ class BaseClient:
             auto_routing=auto_routing,
             max_routing_providers=max_routing_providers,
             topic=topic,
+            published_after=published_after,
+            published_before=published_before,
         )
         if search:
             body["search"] = search
@@ -441,3 +453,15 @@ class BaseClient:
         except ValueError:
             body = response.text
         return cls._handle_response(response.status_code, body)
+
+
+def _iso(value: str | date) -> str:
+    """A ``published_after``/``published_before`` value for the wire. A string goes
+    as written (no zone means UTC; the server parses and validates it). A naive
+    ``datetime`` is local time, as everywhere in Python, so it goes with the local
+    zone attached; a ``date`` goes as the day."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, datetime) and value.tzinfo is None:
+        value = value.astimezone()
+    return value.isoformat()

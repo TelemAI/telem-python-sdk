@@ -47,7 +47,12 @@ from urllib.parse import unquote, urlsplit
 from telem import AsyncTelem, resolve_search_options
 from telem.errors import APIStatusError
 from telem.integrations import _hermes_state, _trajectory_v5, _update_advisory
-from telem.integrations._tools import TOPIC_DESCRIPTION, topic_search_kwargs
+from telem.integrations._tools import (
+    PUBLISHED_AFTER_DESCRIPTION,
+    PUBLISHED_BEFORE_DESCRIPTION,
+    TOPIC_DESCRIPTION,
+    model_search_kwargs,
+)
 from telem.integrations._hermes_render import (
     FETCH_MAX_URLS,
     render_fetch,
@@ -162,6 +167,8 @@ SEARCH_SCHEMA: dict[str, Any] = {
                 ),
             },
             "topic": {"type": "string", "description": TOPIC_DESCRIPTION},
+            "published_after": {"type": "string", "description": PUBLISHED_AFTER_DESCRIPTION},
+            "published_before": {"type": "string", "description": PUBLISHED_BEFORE_DESCRIPTION},
         },
         "required": ["queries"],
     },
@@ -623,7 +630,6 @@ async def _send(plan: _trajectory_v5.DeliveryPlan, send: Callable[[], Awaitable[
 async def telem_search(args: dict, **kwargs: Any) -> str:
     queries = normalize_queries((args or {}).get("queries"))
     goal = ((args or {}).get("goal") or "").strip() or None
-    topic = (args or {}).get("topic")
     options = _search_options()
 
     async with AsyncTelem() as client:
@@ -637,7 +643,7 @@ async def telem_search(args: dict, **kwargs: Any) -> str:
                 queries,
                 goal=goal,
                 metadata=metadata,
-                **topic_search_kwargs(topic),
+                **model_search_kwargs(args),
                 **options,
             ),
         )

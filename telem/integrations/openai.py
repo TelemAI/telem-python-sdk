@@ -26,8 +26,10 @@ from telem.integrations._openai_trajectory import (
 )
 from telem.integrations._tools import (
     DEFAULT_RESULT_MAX_LEN,
+    PUBLISHED_AFTER_DESCRIPTION,
+    PUBLISHED_BEFORE_DESCRIPTION,
     TOPIC_DESCRIPTION,
-    topic_search_kwargs,
+    model_search_kwargs,
 )
 from telem.integrations._tools import format_search_results as _format_results
 from telem.integrations._trajectory_v5 import (
@@ -53,6 +55,11 @@ TELEM_SEARCH_TOOL: dict[str, Any] = {
             "properties": {
                 "query": {"type": "string", "description": "The query to search for."},
                 "topic": {"type": "string", "description": TOPIC_DESCRIPTION},
+                "published_after": {"type": "string", "description": PUBLISHED_AFTER_DESCRIPTION},
+                "published_before": {
+                    "type": "string",
+                    "description": PUBLISHED_BEFORE_DESCRIPTION,
+                },
             },
             "required": ["query"],
         },
@@ -136,10 +143,10 @@ def _call_arguments(call: Any) -> Any:
     return function.get("arguments", "") if isinstance(function, dict) else function.arguments
 
 
-def _topic_from_call(call: Any) -> Any:
-    """The raw per-call ``topic`` argument, or None when the arguments carry none."""
+def _args_from_call(call: Any) -> Any:
+    """The parsed JSON arguments of a tool call, or None when they do not parse."""
     try:
-        return json.loads(_call_arguments(call)).get("topic")
+        return json.loads(_call_arguments(call))
     except (ValueError, TypeError, AttributeError):
         return None
 
@@ -344,7 +351,7 @@ def _delivery_plan(state: _WrapState) -> DeliveryPlan:
 
 
 def _run_search(
-    state: _WrapState, query: str, tool_call_id: str, topic: Any = None
+    state: _WrapState, query: str, tool_call_id: str, args: Any = None
 ) -> SearchResponse:
     """One search, plus the single in-call retry the guard's 409 asks for.
 
@@ -357,7 +364,7 @@ def _run_search(
     """
     plan = _delivery_plan(state)
     kwargs = _search_kwargs(state, tool_call_id, plan)
-    kwargs.update(topic_search_kwargs(topic))
+    kwargs.update(model_search_kwargs(args))
     try:
         response = state.telem.search(query, **kwargs)
     except APIStatusError as error:
@@ -373,12 +380,12 @@ def _run_search(
 
 
 async def _arun_search(
-    state: _WrapState, query: str, tool_call_id: str, topic: Any = None
+    state: _WrapState, query: str, tool_call_id: str, args: Any = None
 ) -> SearchResponse:
     """The async twin of :func:`_run_search`; see it for the reasoning."""
     plan = _delivery_plan(state)
     kwargs = _search_kwargs(state, tool_call_id, plan)
-    kwargs.update(topic_search_kwargs(topic))
+    kwargs.update(model_search_kwargs(args))
     try:
         response = await state.telem.search(query, **kwargs)
     except APIStatusError as error:
@@ -585,7 +592,7 @@ def wrap_openai(
         tool_messages: list[dict[str, Any]] = []
         for call in calls:
             response = _run_search(
-                state, _query_from_call(call), _call_id(call), _topic_from_call(call)
+                state, _query_from_call(call), _call_id(call), _args_from_call(call)
             )
             _adopt_session_id(client, response)
             call_id = _call_id(call)
@@ -618,7 +625,7 @@ def wrap_openai(
                     state,
                     _query_from_call(tool_call),
                     _call_id(tool_call),
-                    _topic_from_call(tool_call),
+                    _args_from_call(tool_call),
                 )
                 _adopt_session_id(client, response)
                 call_id = _call_id(tool_call)
@@ -721,7 +728,7 @@ def wrap_async_openai(
         tool_messages: list[dict[str, Any]] = []
         for call in calls:
             response = await _arun_search(
-                state, _query_from_call(call), _call_id(call), _topic_from_call(call)
+                state, _query_from_call(call), _call_id(call), _args_from_call(call)
             )
             _adopt_session_id(client, response)
             call_id = _call_id(call)
@@ -754,7 +761,7 @@ def wrap_async_openai(
                     state,
                     _query_from_call(tool_call),
                     _call_id(tool_call),
-                    _topic_from_call(tool_call),
+                    _args_from_call(tool_call),
                 )
                 _adopt_session_id(client, response)
                 call_id = _call_id(tool_call)

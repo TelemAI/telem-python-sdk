@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import date
 from typing import Any
 
 import httpx
@@ -109,6 +110,8 @@ class Telem(BaseClient):
         auto_routing: str | None = None,
         max_routing_providers: int | None = None,
         topic: str | None = None,
+        published_after: str | date | None = None,
+        published_before: str | date | None = None,
         goal: str | None = None,
         context: str | None = None,
         session: str | None = None,
@@ -138,6 +141,12 @@ class Telem(BaseClient):
             auto_routing: Routing mode: ``"accuracy"``, ``"latency"`` or ``"search_cost"``.
             max_routing_providers: How many providers a routed query uses.
             topic: Topic name for the query.
+            published_after: Only return results published on or after this date or
+                date-time (an ISO 8601 string, or a ``date``/``datetime``). A string
+                with no time zone is UTC; a naive ``datetime`` is local time. Results
+                with no known publication date are kept.
+            published_before: Only return results published before this date or
+                date-time. A date with no time includes that whole day.
             goal: Optional agent goal, merged into request metadata.
             context: Optional context string, merged into request metadata.
             session: Optional session id to continue an existing session.
@@ -159,6 +168,8 @@ class Telem(BaseClient):
             auto_routing=auto_routing,
             max_routing_providers=max_routing_providers,
             topic=topic,
+            published_after=published_after,
+            published_before=published_before,
             goal=goal,
             context=context,
             session=session,

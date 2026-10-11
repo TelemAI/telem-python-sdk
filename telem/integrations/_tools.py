@@ -14,17 +14,41 @@ TOPIC_DESCRIPTION = (
     "Optional. Set it only when the answer must come from one site: linkedin, reddit, or x "
     "(twitter is also accepted). Leave it unset otherwise."
 )
+#: The descriptions of the optional per-call publication window, as ``TOPIC_DESCRIPTION``.
+PUBLISHED_AFTER_DESCRIPTION = (
+    "Optional. Only return results published on or after this date or date-time, in ISO "
+    "8601 (for example 2026-10-01 or 2026-10-01T09:00:00Z). A value with no time zone is "
+    "read as UTC. Results with no known publication date are kept. Set it only when the "
+    "task needs sources from a time period; leave it unset otherwise."
+)
+PUBLISHED_BEFORE_DESCRIPTION = (
+    "Optional. Only return results published before this date or date-time, in ISO 8601. "
+    "A value with no time zone is read as UTC, and a date with no time includes that whole "
+    "day. Results with no known publication date are kept. Set it only when the task needs "
+    "sources from a time period; leave it unset otherwise."
+)
+
+#: The ``search()`` options a model may set per call.
+_MODEL_ARGS = ("topic", "published_after", "published_before")
 
 
-def topic_search_kwargs(topic: Any) -> dict[str, Any]:
-    """``search()`` keyword arguments for a model's per-call ``topic``.
+def model_search_kwargs(args: Any) -> dict[str, Any]:
+    """``search()`` keyword arguments for a model's per-call tool arguments: ``topic``
+    and the publication window.
 
-    The topic is trimmed, and anything but a non-blank string is unset: no kwargs, so
+    Each value is trimmed, and anything but a non-blank string is unset: no kwarg, so
     ``TELEM_TOPIC`` still applies. The routing MODE is never taken from anything the
     model sent — it comes from the ``autoRouting`` config key or ``TELEM_AUTO_ROUTING``.
     """
-    topic = topic.strip() if isinstance(topic, str) else ""
-    return {"topic": topic} if topic else {}
+    if not isinstance(args, dict):
+        return {}
+    kwargs = {}
+    for name in _MODEL_ARGS:
+        value = args.get(name)
+        value = value.strip() if isinstance(value, str) else ""
+        if value:
+            kwargs[name] = value
+    return kwargs
 
 
 def format_search_results(response: SearchResponse, max_len: int) -> str:

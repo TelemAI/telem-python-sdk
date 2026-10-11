@@ -20,9 +20,11 @@ from telem.client import Telem
 from telem.integrations._langchain_trajectory import create_child_config, trajectory_metadata
 from telem.integrations._tools import (
     DEFAULT_RESULT_MAX_LEN,
+    PUBLISHED_AFTER_DESCRIPTION,
+    PUBLISHED_BEFORE_DESCRIPTION,
     TOPIC_DESCRIPTION,
     format_search_results,
-    topic_search_kwargs,
+    model_search_kwargs,
 )
 from telem.models import SearchResponse
 
@@ -36,6 +38,8 @@ class TelemSearchInput(BaseModel):
 
     query: str = Field(description="The query to search for.")
     topic: str | None = Field(default=None, description=TOPIC_DESCRIPTION)
+    published_after: str | None = Field(default=None, description=PUBLISHED_AFTER_DESCRIPTION)
+    published_before: str | None = Field(default=None, description=PUBLISHED_BEFORE_DESCRIPTION)
     runtime: ToolRuntime = Field(default=None)  # type: ignore[assignment]
 
 
@@ -128,10 +132,20 @@ def create_telem_search_tool(
         async def async_search(
             query: str,
             topic: str | None = None,
+            published_after: str | None = None,
+            published_before: str | None = None,
             runtime: ToolRuntime = None,  # type: ignore[assignment]
         ) -> tuple[str, SearchResponse]:
             response = await client.search(
-                query, **topic_search_kwargs(topic), **runtime_search_kwargs(runtime)
+                query,
+                **model_search_kwargs(
+                    {
+                        "topic": topic,
+                        "published_after": published_after,
+                        "published_before": published_before,
+                    }
+                ),
+                **runtime_search_kwargs(runtime),
             )
             return format_search_results(response, result_max_len), response
 
@@ -150,10 +164,20 @@ def create_telem_search_tool(
         def search(
             query: str,
             topic: str | None = None,
+            published_after: str | None = None,
+            published_before: str | None = None,
             runtime: ToolRuntime = None,  # type: ignore[assignment]
         ) -> tuple[str, SearchResponse]:
             response = client.search(
-                query, **topic_search_kwargs(topic), **runtime_search_kwargs(runtime)
+                query,
+                **model_search_kwargs(
+                    {
+                        "topic": topic,
+                        "published_after": published_after,
+                        "published_before": published_before,
+                    }
+                ),
+                **runtime_search_kwargs(runtime),
             )
             return format_search_results(response, result_max_len), response
 
