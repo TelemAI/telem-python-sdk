@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from telem.models import SearchResponse
+from telem.models import SearchResponse, SearchResult
 
 DEFAULT_RESULT_MAX_LEN = 2048
 
@@ -51,10 +51,16 @@ def model_search_kwargs(args: Any) -> dict[str, Any]:
     return kwargs
 
 
+def _block(result: SearchResult, max_len: int) -> str:
+    published = (result.publish_date or "").strip()
+    date_line = f"Published: {published}\n" if published else ""
+    return (
+        f"URL: {result.url}\nTitle: {result.title}\n{date_line}Content: {result.content[:max_len]}"
+    )
+
+
 def format_search_results(response: SearchResponse, max_len: int) -> str:
-    """Format search results for a model, one block per result, content truncated."""
-    blocks = [
-        f"URL: {result.url}\nTitle: {result.title}\nContent: {result.content[:max_len]}"
-        for result in response.results
-    ]
+    """Format search results for a model, one block per result, content truncated.
+    The ``Published:`` line appears only when the result has a publication date."""
+    blocks = [_block(result, max_len) for result in response.results]
     return "\n\n".join(blocks) if blocks else "No results found."

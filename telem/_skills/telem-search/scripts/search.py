@@ -51,8 +51,13 @@ from telem import SearchResponse, SearchResult, Telem, TelemError, resolve_searc
 
 
 def _block(result: SearchResult, max_len: int) -> str:
-    """Render one result as a URL/Title/Content block, content truncated to max_len."""
-    return f"URL: {result.url}\nTitle: {result.title}\nContent: {result.content[:max_len]}"
+    """Render one result as a URL/Title/Content block, content truncated to max_len,
+    with a Published line between Title and Content when the result has a date."""
+    published = (result.publish_date or "").strip()
+    date_line = f"Published: {published}\n" if published else ""
+    return (
+        f"URL: {result.url}\nTitle: {result.title}\n{date_line}Content: {result.content[:max_len]}"
+    )
 
 
 def format_results(response: SearchResponse, max_len: int) -> str:
