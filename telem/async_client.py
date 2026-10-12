@@ -11,6 +11,7 @@ import httpx
 from telem._base import _DEFAULT_TIMEOUT, BaseClient
 from telem._normalize import build_fetch_response, build_search_response
 from telem.models import FetchResponse, ProviderInfo, SearchResponse
+from telem.resources.monitors import AsyncMonitorsResource
 from telem.resources.sessions import AsyncSessionsResource
 
 
@@ -78,6 +79,7 @@ class AsyncTelem(BaseClient):
         )
         self._client = httpx.AsyncClient(timeout=timeout, headers=self._headers())
         self._sessions = AsyncSessionsResource(self)
+        self._monitors = AsyncMonitorsResource(self)
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """Issue a GET request and return the parsed body (raising typed errors on failure)."""
@@ -91,6 +93,14 @@ class AsyncTelem(BaseClient):
         """Issue a POST request and return the parsed body (raising typed errors on failure)."""
         try:
             response = await self._client.post(self._url(path), json=json)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise self._connection_error(path, exc) from exc
+        return self._result(response)
+
+    async def _request(self, method: str, path: str, json: dict[str, Any] | None = None) -> Any:
+        """Issue a PATCH/DELETE request and return the parsed body (typed errors on failure)."""
+        try:
+            response = await self._client.request(method, self._url(path), json=json)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             raise self._connection_error(path, exc) from exc
         return self._result(response)
@@ -295,6 +305,11 @@ class AsyncTelem(BaseClient):
             parent=parent,
             result_max_len=result_max_len,
         )
+
+    @property
+    def monitors(self) -> AsyncMonitorsResource:
+        """Access monitor operations (create, list, get, update, poll, delete)."""
+        return self._monitors
 
     @property
     def sessions(self) -> AsyncSessionsResource:

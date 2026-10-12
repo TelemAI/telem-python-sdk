@@ -15,6 +15,8 @@ from telem.errors import (
 from telem.models import (
     FetchResponse,
     FetchResult,
+    Monitor,
+    MonitorProvider,
     ProviderInfo,
     ProviderRun,
     SearchResponse,
@@ -38,6 +40,8 @@ __all__ = [
     "SessionSummary",
     "SessionHistory",
     "SessionResults",
+    "Monitor",
+    "MonitorProvider",
     "TelemError",
     "AuthError",
     "BadRequestError",
