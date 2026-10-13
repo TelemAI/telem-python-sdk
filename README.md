@@ -156,16 +156,14 @@ A monitor runs a query on a schedule. Poll it to get the results that are new si
 your last poll. `poll` returns a `SearchResponse`:
 
 ```python
-monitor = client.monitors.create(
-    "Nvidia files a new 8-K with the SEC", providers=["exa", "parallel"], frequency="1h"
-)
+monitor = client.monitors.create("Nvidia files a new 8-K with the SEC", frequency="1h")
 response = client.monitors.poll(monitor.id)
 client.monitors.update(monitor.id, status="paused")
 client.monitors.delete(monitor.id)
 ```
 
 `client.monitors` also has `get` and `list`. See [Monitors](https://docs.telem.ai/resources/monitors/)
-for the fields, the costs and the errors.
+for the fields and the errors.
 
 ## LangChain and LangGraph integration
 

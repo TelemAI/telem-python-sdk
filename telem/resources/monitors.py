@@ -1,4 +1,4 @@
-"""Monitors: a query that providers run on a schedule, read back with ``poll``."""
+"""Monitors: a query that Telem runs on a schedule, read back with ``poll``."""
 
 from __future__ import annotations
 
@@ -17,16 +17,11 @@ if TYPE_CHECKING:
 
 def _create_body(
     query: str,
-    providers: list[str],
     frequency: str,
-    provider_overrides: dict[str, dict[str, Any]] | None,
     metadata: dict[str, Any] | None,
     webhook_url: str | None,
 ) -> dict[str, Any]:
-    options: dict[str, Any] = {"providers": {"include": list(providers)}, "frequency": frequency}
-    if provider_overrides is not None:
-        options["provider_overrides"] = provider_overrides
-    body: dict[str, Any] = {"query": query, "options": options}
+    body: dict[str, Any] = {"query": query, "options": {"frequency": frequency}}
     if metadata is not None:
         body["metadata"] = metadata
     if webhook_url is not None:
@@ -37,10 +32,9 @@ def _create_body(
 def _update_body(
     status: str | None,
     frequency: str | None,
-    provider_overrides: dict[str, dict[str, Any]] | None,
     webhook_url: str | None,
 ) -> dict[str, Any]:
-    body = {"status": status, "frequency": frequency, "provider_overrides": provider_overrides}
+    body = {"status": status, "frequency": frequency}
     body = {key: value for key, value in body.items() if value is not None}
     if webhook_url is not None:
         body["webhook_url"] = webhook_url or None  # "" removes the webhook
@@ -102,19 +96,15 @@ class MonitorsResource:
         self,
         query: str,
         *,
-        providers: list[str],
         frequency: str,
-        provider_overrides: dict[str, dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
         webhook_url: str | None = None,
     ) -> Monitor:
-        """Create a monitor. Each provider runs ``query`` on the schedule.
+        """Create a monitor. Telem runs ``query`` on the schedule.
 
         Args:
             query: What to watch for, as a plain sentence.
-            providers: One or more provider names, for example ``["exa", "parallel"]``.
             frequency: ``"1h"``, ``"6h"``, ``"1d"`` or ``"7d"``.
-            provider_overrides: Per-provider create fields, keyed by provider name.
             metadata: Request metadata (query lineage keys), as in a search.
             webhook_url: An ``https`` URL that receives the new results.
 
@@ -122,7 +112,7 @@ class MonitorsResource:
             The new :class:`Monitor`. With ``webhook_url``, its ``webhook_secret``
             signs the deliveries; Telem shows it only in this response.
         """
-        body = _create_body(query, providers, frequency, provider_overrides, metadata, webhook_url)
+        body = _create_body(query, frequency, metadata, webhook_url)
         return Monitor.model_validate(self._client._post("/v1/monitors", body))
 
     def list(self, *, limit: int | None = None) -> list[Monitor]:
@@ -143,7 +133,6 @@ class MonitorsResource:
         *,
         status: str | None = None,
         frequency: str | None = None,
-        provider_overrides: dict[str, dict[str, Any]] | None = None,
         webhook_url: str | None = None,
     ) -> Monitor:
         """Pause, resume or change a monitor. Send at least one field.
@@ -152,15 +141,13 @@ class MonitorsResource:
             monitor_id: The monitor id.
             status: ``"paused"`` or ``"active"``.
             frequency: A new frequency.
-            provider_overrides: New overrides for the providers named. They replace the
-                overrides you sent before for that provider.
             webhook_url: A new webhook URL, with a new ``webhook_secret`` in the
                 response. ``""`` removes the webhook.
 
         Returns:
             The updated :class:`Monitor`.
         """
-        body = _update_body(status, frequency, provider_overrides, webhook_url)
+        body = _update_body(status, frequency, webhook_url)
         return Monitor.model_validate(self._client._request("PATCH", _path(monitor_id), body))
 
     def poll(
@@ -178,7 +165,7 @@ class MonitorsResource:
             metadata: Request metadata (query lineage keys), as in a search.
 
         Returns:
-            A :class:`SearchResponse`, with one ``by_provider`` entry for each provider.
+            A :class:`SearchResponse`.
         """
         data = self._client._post(_path(monitor_id, "/poll"), _poll_body(session, metadata))
         return build_search_response(data)
@@ -198,14 +185,12 @@ class AsyncMonitorsResource:
         self,
         query: str,
         *,
-        providers: list[str],
         frequency: str,
-        provider_overrides: dict[str, dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
         webhook_url: str | None = None,
     ) -> Monitor:
         """Create a monitor. See :meth:`MonitorsResource.create`."""
-        body = _create_body(query, providers, frequency, provider_overrides, metadata, webhook_url)
+        body = _create_body(query, frequency, metadata, webhook_url)
         return Monitor.model_validate(await self._client._post("/v1/monitors", body))
 
     async def list(self, *, limit: int | None = None) -> list[Monitor]:
@@ -223,11 +208,10 @@ class AsyncMonitorsResource:
         *,
         status: str | None = None,
         frequency: str | None = None,
-        provider_overrides: dict[str, dict[str, Any]] | None = None,
         webhook_url: str | None = None,
     ) -> Monitor:
         """Pause, resume or change a monitor. See :meth:`MonitorsResource.update`."""
-        body = _update_body(status, frequency, provider_overrides, webhook_url)
+        body = _update_body(status, frequency, webhook_url)
         data = await self._client._request("PATCH", _path(monitor_id), body)
         return Monitor.model_validate(data)
 

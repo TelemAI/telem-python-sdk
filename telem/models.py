@@ -173,26 +173,16 @@ class SessionResults(BaseModel):
     previous_preprocessor_results: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class MonitorProvider(BaseModel):
-    """One provider of a :class:`Monitor`, with its own status."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    name: str
-    #: ``active``, ``paused`` (you paused it) or ``idle`` (paused because nobody
-    #: polled; the next poll resumes it).
-    status: str
-
-
 class Monitor(BaseModel):
-    """A monitor: a query that providers run on a schedule."""
+    """A monitor: a query that Telem runs on a schedule."""
 
     model_config = ConfigDict(extra="ignore")
 
     id: str
     query: str
     frequency: str
-    providers: list[MonitorProvider] = Field(default_factory=list)
+    #: ``active`` or ``paused`` (you paused it).
+    status: str
     session_id: str
     created_at: str
     last_polled_at: str | None = None
