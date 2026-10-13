@@ -25,6 +25,7 @@ from telem.models import (
     SessionResults,
     SessionSummary,
 )
+from telem.resources.monitors import verify_webhook
 from telem._version import __version__
 
 __all__ = [
@@ -42,6 +43,7 @@ __all__ = [
     "SessionResults",
     "Monitor",
     "MonitorProvider",
+    "verify_webhook",
     "TelemError",
     "AuthError",
     "BadRequestError",

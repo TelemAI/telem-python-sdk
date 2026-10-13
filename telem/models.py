@@ -196,3 +196,6 @@ class Monitor(BaseModel):
     session_id: str
     created_at: str
     last_polled_at: str | None = None
+    webhook_url: str | None = None
+    #: Signs the webhook deliveries. Only in the response that set ``webhook_url``.
+    webhook_secret: str | None = None

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import time
 from typing import TYPE_CHECKING, Any
 
 from telem._normalize import build_search_response
@@ -18,6 +21,7 @@ def _create_body(
     frequency: str,
     provider_overrides: dict[str, dict[str, Any]] | None,
     metadata: dict[str, Any] | None,
+    webhook_url: str | None,
 ) -> dict[str, Any]:
     options: dict[str, Any] = {"providers": {"include": list(providers)}, "frequency": frequency}
     if provider_overrides is not None:
@@ -25,6 +29,8 @@ def _create_body(
     body: dict[str, Any] = {"query": query, "options": options}
     if metadata is not None:
         body["metadata"] = metadata
+    if webhook_url is not None:
+        body["webhook_url"] = webhook_url
     return body
 
 
@@ -32,9 +38,34 @@ def _update_body(
     status: str | None,
     frequency: str | None,
     provider_overrides: dict[str, dict[str, Any]] | None,
+    webhook_url: str | None,
 ) -> dict[str, Any]:
     body = {"status": status, "frequency": frequency, "provider_overrides": provider_overrides}
-    return {key: value for key, value in body.items() if value is not None}
+    body = {key: value for key, value in body.items() if value is not None}
+    if webhook_url is not None:
+        body["webhook_url"] = webhook_url or None  # "" removes the webhook
+    return body
+
+
+def verify_webhook(body: bytes | str, header: str, secret: str, *, tolerance: int = 300) -> bool:
+    """Check a monitor webhook: the ``Telem-Signature`` header against the raw body.
+
+    Args:
+        body: The raw request body, exactly as received.
+        header: The ``Telem-Signature`` header.
+        secret: The monitor's ``webhook_secret``.
+        tolerance: The oldest signature to accept, in seconds.
+
+    Returns:
+        True when the signature is correct and not older than ``tolerance``.
+    """
+    parts = dict(item.split("=", 1) for item in header.split(",") if "=" in item)
+    timestamp, signature = parts.get("t", ""), parts.get("v1", "")
+    if not timestamp.isdigit() or abs(time.time() - int(timestamp)) > tolerance:
+        return False
+    raw = body.encode() if isinstance(body, str) else body
+    expected = hmac.new(secret.encode(), f"{timestamp}.".encode() + raw, hashlib.sha256)
+    return hmac.compare_digest(expected.hexdigest(), signature)
 
 
 def _poll_body(session: str | None, metadata: dict[str, Any] | None) -> dict[str, Any]:
@@ -75,6 +106,7 @@ class MonitorsResource:
         frequency: str,
         provider_overrides: dict[str, dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
+        webhook_url: str | None = None,
     ) -> Monitor:
         """Create a monitor. Each provider runs ``query`` on the schedule.
 
@@ -84,11 +116,13 @@ class MonitorsResource:
             frequency: ``"1h"``, ``"6h"``, ``"1d"`` or ``"7d"``.
             provider_overrides: Per-provider create fields, keyed by provider name.
             metadata: Request metadata (query lineage keys), as in a search.
+            webhook_url: An ``https`` URL that receives the new results.
 
         Returns:
-            The new :class:`Monitor`.
+            The new :class:`Monitor`. With ``webhook_url``, its ``webhook_secret``
+            signs the deliveries; Telem shows it only in this response.
         """
-        body = _create_body(query, providers, frequency, provider_overrides, metadata)
+        body = _create_body(query, providers, frequency, provider_overrides, metadata, webhook_url)
         return Monitor.model_validate(self._client._post("/v1/monitors", body))
 
     def list(self, *, limit: int | None = None) -> list[Monitor]:
@@ -110,6 +144,7 @@ class MonitorsResource:
         status: str | None = None,
         frequency: str | None = None,
         provider_overrides: dict[str, dict[str, Any]] | None = None,
+        webhook_url: str | None = None,
     ) -> Monitor:
         """Pause, resume or change a monitor. Send at least one field.
 
@@ -119,11 +154,13 @@ class MonitorsResource:
             frequency: A new frequency.
             provider_overrides: New overrides for the providers named. They replace the
                 overrides you sent before for that provider.
+            webhook_url: A new webhook URL, with a new ``webhook_secret`` in the
+                response. ``""`` removes the webhook.
 
         Returns:
             The updated :class:`Monitor`.
         """
-        body = _update_body(status, frequency, provider_overrides)
+        body = _update_body(status, frequency, provider_overrides, webhook_url)
         return Monitor.model_validate(self._client._request("PATCH", _path(monitor_id), body))
 
     def poll(
@@ -165,9 +202,10 @@ class AsyncMonitorsResource:
         frequency: str,
         provider_overrides: dict[str, dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
+        webhook_url: str | None = None,
     ) -> Monitor:
         """Create a monitor. See :meth:`MonitorsResource.create`."""
-        body = _create_body(query, providers, frequency, provider_overrides, metadata)
+        body = _create_body(query, providers, frequency, provider_overrides, metadata, webhook_url)
         return Monitor.model_validate(await self._client._post("/v1/monitors", body))
 
     async def list(self, *, limit: int | None = None) -> list[Monitor]:
@@ -186,9 +224,10 @@ class AsyncMonitorsResource:
         status: str | None = None,
         frequency: str | None = None,
         provider_overrides: dict[str, dict[str, Any]] | None = None,
+        webhook_url: str | None = None,
     ) -> Monitor:
         """Pause, resume or change a monitor. See :meth:`MonitorsResource.update`."""
-        body = _update_body(status, frequency, provider_overrides)
+        body = _update_body(status, frequency, provider_overrides, webhook_url)
         data = await self._client._request("PATCH", _path(monitor_id), body)
         return Monitor.model_validate(data)
 
