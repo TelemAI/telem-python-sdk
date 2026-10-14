@@ -156,7 +156,7 @@ A monitor runs a query on a schedule. Poll it to get the results that are new si
 your last poll. `poll` returns a `SearchResponse`:
 
 ```python
-monitor = client.monitors.create("Nvidia files a new 8-K with the SEC", frequency="1h")
+monitor = client.monitors.create("Nvidia files a new 8-K with the SEC", frequency="1h", ttl="7d")
 response = client.monitors.poll(monitor.id)
 client.monitors.update(monitor.id, status="paused")
 client.monitors.delete(monitor.id)

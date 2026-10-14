@@ -20,12 +20,15 @@ def _create_body(
     frequency: str,
     metadata: dict[str, Any] | None,
     webhook_url: str | None,
+    ttl: str | None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"query": query, "options": {"frequency": frequency}}
     if metadata is not None:
         body["metadata"] = metadata
     if webhook_url is not None:
         body["webhook_url"] = webhook_url
+    if ttl is not None:
+        body["ttl"] = ttl
     return body
 
 
@@ -99,6 +102,7 @@ class MonitorsResource:
         frequency: str,
         metadata: dict[str, Any] | None = None,
         webhook_url: str | None = None,
+        ttl: str | None = None,
     ) -> Monitor:
         """Create a monitor. Telem runs ``query`` on the schedule.
 
@@ -107,12 +111,14 @@ class MonitorsResource:
             frequency: ``"1h"``, ``"6h"``, ``"1d"`` or ``"7d"``.
             metadata: Request metadata (query lineage keys), as in a search.
             webhook_url: An ``https`` URL that receives the new results.
+            ttl: Delete the monitor after this long, such as ``"12h"`` or ``"7d"``
+                (at most ``"30d"``). Without it, the monitor never expires.
 
         Returns:
             The new :class:`Monitor`. With ``webhook_url``, its ``webhook_secret``
             signs the deliveries; Telem shows it only in this response.
         """
-        body = _create_body(query, frequency, metadata, webhook_url)
+        body = _create_body(query, frequency, metadata, webhook_url, ttl)
         return Monitor.model_validate(self._client._post("/v1/monitors", body))
 
     def list(self, *, limit: int | None = None) -> list[Monitor]:
@@ -188,9 +194,10 @@ class AsyncMonitorsResource:
         frequency: str,
         metadata: dict[str, Any] | None = None,
         webhook_url: str | None = None,
+        ttl: str | None = None,
     ) -> Monitor:
         """Create a monitor. See :meth:`MonitorsResource.create`."""
-        body = _create_body(query, frequency, metadata, webhook_url)
+        body = _create_body(query, frequency, metadata, webhook_url, ttl)
         return Monitor.model_validate(await self._client._post("/v1/monitors", body))
 
     async def list(self, *, limit: int | None = None) -> list[Monitor]:
