@@ -167,6 +167,7 @@ class BaseClient:
         topic: str | None = None,
         published_after: str | date | None = None,
         published_before: str | date | None = None,
+        include_domains: list[str] | None = None,
     ) -> dict[str, Any]:
         """Resolve call arguments against the client defaults into the wire ``search`` block.
 
@@ -250,6 +251,8 @@ class BaseClient:
             block["published_after"] = _iso(published_after)
         if published_before is not None:
             block["published_before"] = _iso(published_before)
+        if include_domains is not None:
+            block["include_domains"] = include_domains
         return block
 
     def _search_body(
@@ -269,6 +272,7 @@ class BaseClient:
         topic: str | None = None,
         published_after: str | date | None = None,
         published_before: str | date | None = None,
+        include_domains: list[str] | None = None,
         goal: str | None = None,
         context: str | None = None,
         session: str | None = None,
@@ -332,6 +336,7 @@ class BaseClient:
             topic=topic,
             published_after=published_after,
             published_before=published_before,
+            include_domains=include_domains,
         )
         if search:
             body["search"] = search

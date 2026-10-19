@@ -122,6 +122,7 @@ class AsyncTelem(BaseClient):
         topic: str | None = None,
         published_after: str | date | None = None,
         published_before: str | date | None = None,
+        include_domains: list[str] | None = None,
         goal: str | None = None,
         context: str | None = None,
         session: str | None = None,
@@ -157,6 +158,9 @@ class AsyncTelem(BaseClient):
                 with no known publication date are kept.
             published_before: Only return results published before this date or
                 date-time. A date with no time includes that whole day.
+            include_domains: Only return results from these domains, at most 20
+                hostnames such as ``"linkedin.com"``. A subdomain such as
+                ``"uk.linkedin.com"`` matches its domain.
             goal: Optional agent goal, merged into request metadata.
             context: Optional context string, merged into request metadata.
             session: Optional session id to continue an existing session.
@@ -180,6 +184,7 @@ class AsyncTelem(BaseClient):
             topic=topic,
             published_after=published_after,
             published_before=published_before,
+            include_domains=include_domains,
             goal=goal,
             context=context,
             session=session,

@@ -17,12 +17,21 @@ if TYPE_CHECKING:
 
 def _create_body(
     query: str,
-    frequency: str,
+    frequency: str | None,
     metadata: dict[str, Any] | None,
     webhook_url: str | None,
     ttl: str | None,
+    search: dict[str, Any] | None,
+    include_domains: list[str] | None,
 ) -> dict[str, Any]:
-    body: dict[str, Any] = {"query": query, "options": {"frequency": frequency}}
+    options: dict[str, Any] = {}
+    if frequency is not None:
+        options["frequency"] = frequency
+    if include_domains is not None:
+        options["include_domains"] = include_domains
+    if search is not None:
+        options["search"] = _search_block(search)
+    body: dict[str, Any] = {"query": query, "options": options}
     if metadata is not None:
         body["metadata"] = metadata
     if webhook_url is not None:
@@ -30,6 +39,19 @@ def _create_body(
     if ttl is not None:
         body["ttl"] = ttl
     return body
+
+
+def _search_block(search: dict[str, Any]) -> dict[str, Any]:
+    """The monitor's search options for the wire: the keys of ``search()``, with
+    ``providers_include``/``providers_exclude`` as ``providers``. No client
+    default applies: a monitor's search is set on the monitor alone."""
+    block = {k: v for k, v in search.items() if not k.startswith("providers_")}
+    providers = {
+        k.removeprefix("providers_"): v for k, v in search.items() if k.startswith("providers_")
+    }
+    if providers:
+        block["providers"] = providers
+    return block
 
 
 def _update_body(
@@ -99,26 +121,34 @@ class MonitorsResource:
         self,
         query: str,
         *,
-        frequency: str,
+        frequency: str | None = None,
         metadata: dict[str, Any] | None = None,
         webhook_url: str | None = None,
         ttl: str | None = None,
+        search: dict[str, Any] | None = None,
+        include_domains: list[str] | None = None,
     ) -> Monitor:
         """Create a monitor. Telem runs ``query`` on the schedule.
 
         Args:
             query: What to watch for, as a plain sentence.
-            frequency: ``"1h"``, ``"6h"``, ``"1d"`` or ``"7d"``.
+            frequency: ``"1h"``, ``"6h"``, ``"12h"``, ``"1d"`` or ``"7d"``. If you leave it
+                out, the monitor runs once a day.
             metadata: Request metadata (query lineage keys), as in a search.
             webhook_url: An ``https`` URL that receives the new results.
             ttl: Delete the monitor after this long, such as ``"12h"`` or ``"7d"``
                 (at most ``"30d"``). Without it, the monitor never expires.
+            search: Also run a web search for ``query`` on the schedule, with these
+                search options, named as in :meth:`Telem.search`: ``num_results`` and ``tier``.
+                ``{}`` uses the defaults.
+            include_domains: Only results from these sites and their subdomains, such as
+                ``["sec.gov"]``, from every source of the monitor.
 
         Returns:
             The new :class:`Monitor`. With ``webhook_url``, its ``webhook_secret``
             signs the deliveries; Telem shows it only in this response.
         """
-        body = _create_body(query, frequency, metadata, webhook_url, ttl)
+        body = _create_body(query, frequency, metadata, webhook_url, ttl, search, include_domains)
         return Monitor.model_validate(self._client._post("/v1/monitors", body))
 
     def list(self, *, limit: int | None = None) -> list[Monitor]:
@@ -191,13 +221,15 @@ class AsyncMonitorsResource:
         self,
         query: str,
         *,
-        frequency: str,
+        frequency: str | None = None,
         metadata: dict[str, Any] | None = None,
         webhook_url: str | None = None,
         ttl: str | None = None,
+        search: dict[str, Any] | None = None,
+        include_domains: list[str] | None = None,
     ) -> Monitor:
         """Create a monitor. See :meth:`MonitorsResource.create`."""
-        body = _create_body(query, frequency, metadata, webhook_url, ttl)
+        body = _create_body(query, frequency, metadata, webhook_url, ttl, search, include_domains)
         return Monitor.model_validate(await self._client._post("/v1/monitors", body))
 
     async def list(self, *, limit: int | None = None) -> list[Monitor]:
