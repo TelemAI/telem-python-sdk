@@ -42,6 +42,9 @@ environment, then — for credentials only — `~/.telem/credentials.json`, then
 | Provider allow-list | `default_providers_include`    | `TELEM_PROVIDERS_INCLUDE` (csv) | the deployment's set  |
 | Provider deny-list  | `default_providers_exclude`    | `TELEM_PROVIDERS_EXCLUDE` (csv) | unset                 |
 | Full page content   | `default_include_full_content` | `TELEM_FULL_CONTENT` (`1` only) | off                   |
+| Fetch providers     | none (`fetch(providers=…)`)    | `TELEM_FETCH_PROVIDERS` (csv) | the server's chain    |
+| Fetch tier          | none (`fetch(tier=…)`)         | `TELEM_FETCH_TIER`         | the server's               |
+| Skip the fetch cache | none (`fetch(no_cache=…)`)    | `TELEM_FETCH_NO_CACHE` (`1` only) | off                |
 
 When an API key is set, requests carry an `Authorization: Bearer <key>` header. Anonymous
 access works for most endpoints locally; `sessions.list` requires a token.
@@ -66,6 +69,12 @@ for exactly the value `1`. `TELEM_PROVIDERS` is NOT read by the SDK: it belongs 
 the Telem plugins, where it survives as a
 **deprecated alias of the provider allow-list**, ranked below `TELEM_PROVIDERS_INCLUDE`
 and below both config files. Export `TELEM_PROVIDERS_INCLUDE` everywhere.
+
+The three fetch defaults have no constructor argument: each resolves as **`fetch`
+argument → env var → unset**, with the same csv and `1`-only rules, and `TELEM_FETCH_TIER`
+is trimmed and lowercased. `no_cache=False` in a call overrides `TELEM_FETCH_NO_CACHE=1`.
+To use the fetch keys in the Telem config files as well, pass
+`**telem.resolve_fetch_options(project_root=...).fetch_kwargs` to `fetch`.
 
 `num_results`, `include_raw` and `provider_overrides` are deliberately call-level only:
 per-call intent, an audit knob and a surgical escape hatch respectively.

@@ -46,7 +46,12 @@ from typing import Any
 
 from telem._config_files import resolve_options
 
-__all__ = ["SearchOptionsResolution", "resolve_search_options"]
+__all__ = [
+    "FetchOptionsResolution",
+    "SearchOptionsResolution",
+    "resolve_fetch_options",
+    "resolve_search_options",
+]
 
 #: Config key -> ``client.search()`` keyword argument. The ONE place the two
 #: vocabularies meet: the config file speaks the cross-harness names of the contract, the
@@ -71,6 +76,12 @@ _SEARCH_KWARGS: Mapping[str, str] = MappingProxyType(
         "providerOverrides": "provider_overrides",
         "autoRouting": "auto_routing",
     }
+)
+
+#: Fetch config key -> ``client.fetch()`` keyword argument, in the block's key order. Its
+#: keys are the FETCH keys of the option table, the ones a search never sends.
+_FETCH_KWARGS: Mapping[str, str] = MappingProxyType(
+    {"fetchProviders": "providers", "fetchTier": "tier", "fetchNoCache": "no_cache"}
 )
 
 #: Precedence rank of each level, lower wins. Mirrors ``layerRank`` in
@@ -320,4 +331,77 @@ def _guard_provider_overrides(values: dict[str, Any], warnings: list[str]) -> No
         f"Add {quoted} to providersInclude in the same config to use {them} — noting that "
         "providersInclude REPLACES the deployment's default provider set with exactly the "
         "providers you list, rather than adding to it."
+    )
+
+
+@dataclass(frozen=True)
+class FetchOptionsResolution:
+    """The fetch options resolved from the unified config, and everything ignored on the way.
+
+    The fetch half of the same files and environment that :func:`resolve_search_options`
+    reads: ``fetchProviders``, ``fetchTier`` and ``fetchNoCache`` only.
+    """
+
+    #: Only the FETCH keys that resolved, under their config names. An absent key is not
+    #: present — never ``None``.
+    values: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+    #: ``"project"`` | ``"user"`` | ``"env"`` per resolved key, keyed like ``values``.
+    sources: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    #: The reader's warnings (an ignored file, a refused relocation). Print them to
+    #: **stderr** — never into text a model reads.
+    warnings: tuple[str, ...] = ()
+
+    def fetch_kwargs(self) -> dict[str, Any]:
+        """The resolved options as ``client.fetch()`` keyword arguments, in the block's key
+        order (``providers``, ``tier``, ``no_cache``).
+
+        ``tier`` is lowercased, because fetch tiers are case-insensitive; that is
+        normalization, not validation, so an unknown tier is still sent for the server to
+        reject. Provider names go as written, and ``no_cache`` as resolved, so a file's
+        ``false`` is sent as ``false``. A fresh ``dict`` each call.
+        """
+        kwargs: dict[str, Any] = {}
+        for key, kwarg in _FETCH_KWARGS.items():
+            if key not in self.values:
+                continue
+            value = self.values[key]
+            if key == "fetchTier":
+                value = value.lower()
+            elif key == "fetchProviders":
+                value = list(value)
+            kwargs[kwarg] = value
+        return kwargs
+
+
+def resolve_fetch_options(
+    *,
+    project_root: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> FetchOptionsResolution:
+    """Resolve the fetch keys of the unified Telem config: project file > user file >
+    ``TELEM_FETCH_*`` env, per key.
+
+    The fetch twin of :func:`resolve_search_options`, with the same opt-in project level
+    and the same never-raises rule. No composition rule applies to the fetch keys.
+
+    Args:
+        project_root: The user's project directory, enabling the project level. ``None``
+            — the default — reads no repo-local file at all.
+        env: Environment to read, defaulting to :data:`os.environ`.
+
+    Returns:
+        A :class:`FetchOptionsResolution`. Never raises: everything that went wrong is a
+        warning.
+    """
+    environ = os.environ if env is None else env
+    try:
+        resolution = resolve_options(environ, project_root)
+    except Exception as error:  # pragma: no cover - defense in depth, as for search
+        return FetchOptionsResolution(warnings=(f"[telem] ignoring the Telem config: {error}",))
+    values = {key: value for key, value in resolution.values.items() if key in _FETCH_KWARGS}
+    sources = {key: level for key, level in resolution.sources.items() if key in _FETCH_KWARGS}
+    return FetchOptionsResolution(
+        values=MappingProxyType(values),
+        sources=MappingProxyType(sources),
+        warnings=tuple(resolution.warnings),
     )

@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from telem._config_files import read_credentials
+from telem._config_files import TELEM_OPTIONS, option_from_env, read_credentials
 from telem._version import __version__
 from telem.errors import TelemConnectionError, TelemServerVersionError, raise_for_status
 
@@ -50,6 +50,13 @@ def _csv_env(name: str) -> list[str] | None:
 def _flag_env(name: str) -> bool | None:
     """Parse a boolean env var: exactly ``"1"`` means True, anything else is unset."""
     return True if os.environ.get(name) == "1" else None
+
+
+def _fetch_env(key: str) -> Any | None:
+    """Read one fetch key from its ``TELEM_FETCH_*`` var with the shared option table's
+    parsing (``nameList`` as CSV, ``name`` trimmed, ``flag`` on with exactly ``"1"``)."""
+    spec = next(spec for spec in TELEM_OPTIONS if spec.key == key)
+    return option_from_env(spec, os.environ)
 
 
 def _int_env(name: str) -> int | None:
@@ -136,6 +143,13 @@ class BaseClient:
             if default_topic is not None
             else ((os.environ.get("TELEM_TOPIC") or "").strip() or None)
         )
+        # Fetch defaults: env var only, else unset; a ``fetch()`` argument wins per key.
+        # The tier is lowercased, as the agent plugins send it. The config files stay
+        # unread here too: ``resolve_fetch_options()`` is the opt-in for them.
+        fetch_tier = _fetch_env("fetchTier")
+        self.default_fetch_providers = _fetch_env("fetchProviders")
+        self.default_fetch_tier = fetch_tier.lower() if fetch_tier is not None else None
+        self.default_fetch_no_cache = _fetch_env("fetchNoCache")
 
     def _headers(self) -> dict[str, str]:
         """Build the default request headers, adding Bearer auth only when an api_key is set."""
@@ -352,6 +366,8 @@ class BaseClient:
         inline_content: bool | None = None,
         inline_max_chars: int | None = None,
         content_format: str | None = None,
+        tier: str | None = None,
+        no_cache: bool | None = None,
         session: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -381,6 +397,13 @@ class BaseClient:
             "urls": url_list,
             "metadata": dict(metadata) if metadata else {},
         }
+        # A call argument wins; ``None`` falls back to the ``TELEM_FETCH_*`` default.
+        if providers is None and self.default_fetch_providers is not None:
+            providers = list(self.default_fetch_providers)
+        if tier is None:
+            tier = self.default_fetch_tier
+        if no_cache is None:
+            no_cache = self.default_fetch_no_cache
         options: dict[str, Any] = {}
         if providers is not None:
             options["providers"] = providers
@@ -390,6 +413,10 @@ class BaseClient:
             options["inline_max_chars"] = inline_max_chars
         if content_format is not None:
             options["content_format"] = content_format
+        if tier is not None:
+            options["tier"] = tier
+        if no_cache is not None:
+            options["no_cache"] = no_cache
         if options:
             body["options"] = options
         if session is not None:

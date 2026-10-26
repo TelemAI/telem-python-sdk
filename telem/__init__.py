@@ -2,7 +2,12 @@
 
 from telem.async_client import AsyncTelem
 from telem.client import Telem
-from telem.config import SearchOptionsResolution, resolve_search_options
+from telem.config import (
+    FetchOptionsResolution,
+    SearchOptionsResolution,
+    resolve_fetch_options,
+    resolve_search_options,
+)
 from telem.errors import (
     APIStatusError,
     AuthError,
@@ -52,4 +57,6 @@ __all__ = [
     # The unified config — read explicitly, never by the client itself.
     "resolve_search_options",
     "SearchOptionsResolution",
+    "resolve_fetch_options",
+    "FetchOptionsResolution",
 ]

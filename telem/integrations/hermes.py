@@ -44,7 +44,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from telem import AsyncTelem, resolve_search_options
+from telem import AsyncTelem, resolve_fetch_options, resolve_search_options
 from telem.errors import APIStatusError
 from telem.integrations import _hermes_state, _trajectory_v5, _update_advisory
 from telem.integrations._tools import (
@@ -338,6 +338,19 @@ def _search_options() -> dict[str, Any]:
     for warning in resolution.warnings:
         logger.warning("%s", warning)
     return resolution.search_kwargs()
+
+
+def _fetch_options() -> dict[str, Any]:
+    """Resolve the fetch keys (``fetchProviders``, ``fetchTier``, ``fetchNoCache``) over
+    project file > user file > ``TELEM_FETCH_*`` for this call, as ``client.fetch()``
+    keyword arguments.
+
+    Never raises; anything ignored is logged, never put into the text the model reads.
+    """
+    resolution = resolve_fetch_options(project_root=project_root())
+    for warning in resolution.warnings:
+        logger.warning("%s", warning)
+    return resolution.fetch_kwargs()
 
 
 def build_trajectory(
@@ -653,11 +666,12 @@ async def telem_search(args: dict, **kwargs: Any) -> str:
 async def telem_fetch(args: dict, **kwargs: Any) -> str:
     urls = normalize_urls((args or {}).get("urls"))
     await assert_urls_safe(urls)
+    options = _fetch_options()
 
     async with AsyncTelem() as client:
         plan = _delivery_plan(client)
         metadata = build_trajectory("fetch", kwargs.get("session_id"), kwargs.get("task_id"), plan)
-        response = await _send(plan, lambda: client.fetch(urls, metadata=metadata))
+        response = await _send(plan, lambda: client.fetch(urls, metadata=metadata, **options))
     return wrap_untrusted("telem_fetch", render_fetch(response))
 
 

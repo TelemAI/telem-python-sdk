@@ -202,6 +202,8 @@ class AsyncTelem(BaseClient):
         inline_content: bool | None = None,
         inline_max_chars: int | None = None,
         content_format: str | None = None,
+        tier: str | None = None,
+        no_cache: bool | None = None,
         session: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> FetchResponse:
@@ -214,10 +216,17 @@ class AsyncTelem(BaseClient):
 
         Args:
             urls: The http(s) URLs to read (the server caps the batch size).
-            providers: Fetch provider chain override (e.g. ``["tavily"]``).
+            providers: Fetch provider chain override (e.g. ``["tavily"]``). Defaults to
+                ``TELEM_FETCH_PROVIDERS``.
             inline_content: Whether to inline page content in the response.
             inline_max_chars: Max inlined characters per page.
             content_format: Requested content format (e.g. ``"markdown"``).
+            tier: Fetch tier: ``"minimalist"``, ``"default"``, ``"extended"`` or ``"max"``
+                (sent as given; the server rejects an unknown one). Defaults to
+                ``TELEM_FETCH_TIER``, lowercased.
+            no_cache: ``True`` reads every page live and skips the shared fetch cache.
+                Defaults to ``TELEM_FETCH_NO_CACHE`` (on with exactly ``"1"``); ``False``
+                overrides it.
             session: Optional session id to continue an existing session.
             metadata: Additional request metadata.
 
@@ -231,6 +240,8 @@ class AsyncTelem(BaseClient):
             inline_content=inline_content,
             inline_max_chars=inline_max_chars,
             content_format=content_format,
+            tier=tier,
+            no_cache=no_cache,
             session=session,
             metadata=metadata,
         )
