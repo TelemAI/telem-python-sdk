@@ -151,6 +151,8 @@ def main() -> None:
         )
     except TelemError as exc:
         sys.exit(f"telem search failed: {exc.message}")
+    except ValueError as exc:  # refused before sending, e.g. the config leaves no provider
+        sys.exit(f"telem search failed: {exc}")
     except httpx.HTTPError as exc:
         sys.exit(f"telem search failed: could not reach the Telem backend ({exc})")
 

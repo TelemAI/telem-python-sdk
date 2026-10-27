@@ -331,8 +331,10 @@ def project_root() -> str:
 def _search_options() -> dict[str, Any]:
     """Resolve project file > user file > ``TELEM_*`` for this call.
 
-    Never raises; anything ignored comes back as a warning, which goes to the
-    host log and never into the text the model reads.
+    Anything ignored comes back as a warning, which goes to the host log and never
+    into the text the model reads. Raises ``ValueError`` before any network call
+    when the config can run no search (``providersExclude`` removes every provider
+    in ``providersInclude``); the message says which lists to fix.
     """
     resolution = resolve_search_options(project_root=project_root())
     for warning in resolution.warnings:

@@ -26,7 +26,10 @@ the user's project (the MCP server, a skill script run by the agent) passes
 **It never raises.** A missing, unreadable, malformed, hostile or wrong-typed file is
 ABSENT, and the next level supplies the key instead; everything ignored comes back in
 :attr:`SearchOptionsResolution.warnings` for the caller to print (this module never
-prints).
+prints). A config that can run no search (``providersExclude`` removes every provider in
+``providersInclude``) is not an error here either: it comes back as
+:attr:`SearchOptionsResolution.refusal`, and :meth:`SearchOptionsResolution.search_kwargs`
+raises it as ``ValueError``, so no request goes out.
 
 The reading itself lives in :mod:`telem._config_files`, the corpus-pinned Python mirror
 of ``config-core``. What this module adds is the three composition rules that a *caller*
@@ -39,12 +42,12 @@ because each one decides what the next one sees.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
-from telem._config_files import resolve_options
+from telem._config_files import CONFIG_FILE_NAME, TELEM_OPTIONS, option_from_env, resolve_options
 
 __all__ = [
     "FetchOptionsResolution",
@@ -115,6 +118,10 @@ class SearchOptionsResolution:
     #: values the composition rules dropped. Print them to **stderr** — never into
     #: text a model reads.
     warnings: tuple[str, ...] = ()
+    #: Set when this config can run no search: ``providersExclude`` removes every
+    #: provider in ``providersInclude``. The provider keys are then absent from
+    #: ``values``, and :meth:`search_kwargs` raises this message, so no request goes out.
+    refusal: str | None = None
 
     def search_kwargs(self) -> dict[str, Any]:
         """The resolved options as ``client.search()`` keyword arguments.
@@ -125,7 +132,14 @@ class SearchOptionsResolution:
         rather than ``None``, so they leave the client's defaults alone.
 
         A fresh, ordinary ``dict`` each call: it is made to be splatted and edited.
+
+        Raises:
+            ValueError: :attr:`refusal` is set. Searching without the provider keys
+                would run the deployment's default set, which can hold the provider
+                the user excluded.
         """
+        if self.refusal is not None:
+            raise ValueError(self.refusal)
         return {_SEARCH_KWARGS[key]: value for key, value in self.values.items()}
 
 
@@ -186,12 +200,19 @@ def resolve_search_options(
     _compose_tier_fields(values, sources, warnings)
     # BEFORE the overrides guard: the guard checks membership against the include the
     # request will actually carry, which is the SUBTRACTED one.
-    _compose_providers(values, warnings)
-    _guard_provider_overrides(values, warnings)
+    refusal = _compose_providers(
+        values,
+        warnings,
+        lambda key: _source_phrase(key, sources.get(key, ""), resolution.telem_dir, environ),
+    )
+    # A refused search sends no overrides, so the guard has nothing to say.
+    if refusal is None:
+        _guard_provider_overrides(values, warnings)
     return SearchOptionsResolution(
         values=MappingProxyType(values),
         sources=MappingProxyType(sources),
         warnings=tuple(warnings),
+        refusal=refusal,
     )
 
 
@@ -225,17 +246,53 @@ def _compose_tier_fields(
     )
 
 
-def _compose_providers(values: dict[str, Any], warnings: list[str]) -> None:
+def _source_phrase(key: str, level: str, telem_dir: str, env: Mapping[str, str]) -> str:
+    """Where a provider list was set, as the end of "set …" in a refusal. Mirrors
+    ``sourcePhrase`` in the shared config contract, so every surface says the same
+    words for the same tree."""
+    if level == "call":
+        return "by the providers_include argument"
+    if level == "project":
+        return "in the project's .telem/telem.json"
+    if level == "env":
+        spec = next(option for option in TELEM_OPTIONS if option.key == key)
+        names = [spec.env or key, *spec.env_aliases]
+        found = [n for n in names if option_from_env(spec._replace(env=n, env_aliases=()), env)]
+        return f"by {(found or names)[0]}"
+    return f"in {os.path.join(telem_dir, CONFIG_FILE_NAME)}"
+
+
+def providers_refusal(include: Sequence[str], in_include: str, in_exclude: str) -> str:
+    """The refusal for a config whose ``providersExclude`` removes every provider in its
+    ``providersInclude``. Mirrors ``providersRefusal`` in the shared config contract."""
+    names = ", ".join(include)
+    if in_include == in_exclude:
+        fix = f"Remove {names} from one of the two lists {in_include}."
+    else:
+        fix = (
+            f"Remove {names} from providersInclude (set {in_include}) "
+            f"or from providersExclude (set {in_exclude})."
+        )
+    return (
+        f"[telem] providersExclude removes every provider in providersInclude ({names}), "
+        f"so no provider is left and no search was sent. {fix}"
+    )
+
+
+def _compose_providers(
+    values: dict[str, Any], warnings: list[str], source_of: Callable[[str], str]
+) -> str | None:
     """When both provider halves resolve, ``exclude`` is subtracted from ``include``
     here and only the subtracted ``include`` is sent.
 
-    The server's rule 3 answers ``search.providers.include`` and ``exclude`` naming the
-    same provider with a 400, and answers an ``include`` that resolves to nothing with a
-    400 as well. Both halves resolving is not exotic: they resolve PER KEY over the
-    ladder, so a user file's ``providersExclude`` meets a project file's
+    The router used to answer ``search.providers.include`` and ``exclude`` naming the
+    same provider with a 400 (since 2026-10-26 it subtracts too, and answers 400 only
+    when nothing is left). Both halves resolving is not exotic: they resolve PER KEY
+    over the ladder, so a user file's ``providersExclude`` meets a project file's
     ``providersInclude`` the moment two people configure the thing they each cared
     about. Forwarding that pair verbatim made a checked-in config break EVERY search in
-    the repository, with a message about the request rather than about the file.
+    the repository, with a message about the request rather than about the file. The
+    client subtracts first so its message can name the file.
 
     Subtracting is not a reinterpretation: ``include`` REPLACES the deployment's default
     set, so once it resolves it already names the whole candidate set, and "run
@@ -244,21 +301,21 @@ def _compose_providers(values: dict[str, Any], warnings: list[str]) -> None:
     wire body is now the same bytes from every surface rather than two dialects of one
     config file.
 
-    An emptied ``include`` drops BOTH halves: the config states an empty provider set,
-    which no search can run, so the deployment's default set runs — loudly — instead of
-    every call failing. (``include: []`` on the wire is the server's 400 by design; that
-    answer belongs to a caller who explicitly asked for nothing, not to a pair of config
-    files that happened to cancel out.) A disjoint pair is silent — dropping a no-op is
-    not news. ``exclude`` ALONE keeps riding verbatim: with no ``include`` the set it
-    subtracts from is the deployment default, which this process cannot enumerate.
+    An emptied ``include`` REFUSES the search (owner design, 2026-10-26): both
+    halves and ``providerOverrides`` leave ``values``, and the refusal is returned, for
+    :meth:`SearchOptionsResolution.search_kwargs` to raise. Running the deployment's
+    default set instead could search the very provider the user excluded. A disjoint
+    pair is silent — dropping a no-op is not news. ``exclude`` ALONE keeps riding
+    verbatim: with no ``include`` the set it subtracts from is the deployment default,
+    which this process cannot enumerate.
 
-    Mirrors ``composeProviders`` in the shared config contract and in the pi skill's
-    vendored reader; the shared corpus pins that the three agree on the byte.
+    Mirrors ``composeProviders`` in the shared config contract and in the three
+    vendored readers; the shared corpus pins that they agree on the byte.
     """
     include = values.get("providersInclude")
     exclude = values.get("providersExclude")
     if not isinstance(include, list) or not isinstance(exclude, list):
-        return
+        return None
 
     excluded = set(exclude)
     kept = [name for name in include if name not in excluded]
@@ -267,23 +324,16 @@ def _compose_providers(values: dict[str, Any], warnings: list[str]) -> None:
 
     if kept:
         values["providersInclude"] = kept
-        if not dropped:
-            return
-        warnings.append(
-            f"[telem] providersExclude removes {', '.join(dropped)} from providersInclude: "
-            f"this search runs {', '.join(kept)}. A request may not name the same provider in "
-            "both halves, so the exclusion is applied to the config and only providersInclude "
-            "is sent."
-        )
-        return
+        if dropped:
+            warnings.append(
+                f"[telem] providersExclude removes {', '.join(dropped)} from providersInclude: "
+                f"this search runs {', '.join(kept)}."
+            )
+        return None
 
     del values["providersInclude"]
-    warnings.append(
-        f"[telem] providersExclude ({', '.join(exclude)}) removes every provider in "
-        f"providersInclude ({', '.join(include)}): this config resolves to an EMPTY provider "
-        "set, which no search can run, so BOTH halves are dropped and the deployment's default "
-        "provider set is running instead."
-    )
+    values.pop("providerOverrides", None)
+    return providers_refusal(include, source_of("providersInclude"), source_of("providersExclude"))
 
 
 def _guard_provider_overrides(values: dict[str, Any], warnings: list[str]) -> None:

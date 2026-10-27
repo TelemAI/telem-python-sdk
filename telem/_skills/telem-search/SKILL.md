@@ -77,17 +77,18 @@ opencode and pi plugins apply, in this order:
 1. A request may carry `tier` **or** `fields`, never both — the more specific level
    wins; on a tie, `fields`.
 2. When **both** `providersInclude` and `providersExclude` resolve, the exclusion is
-   subtracted from the include and only `providersInclude` is sent: the server rejects
-   a request naming the same provider in both halves, and an include already replaces
-   the deployment's default set. If the subtraction empties the include, both halves
-   are dropped and the deployment's default providers run — a config can never resolve
-   to an empty provider set, which would fail every search. `providersExclude` on its
-   own is forwarded verbatim.
+   subtracted from the include and only `providersInclude` is sent: exclude wins, and
+   an include already replaces the deployment's default set. If the subtraction
+   empties the include, no provider is left: the search is refused before anything is
+   sent (`options.refusal`, raised by `search_kwargs`), and the message says where
+   each list was set. The default providers never run instead, because they could
+   include the one you excluded. `providersExclude` on its own is forwarded verbatim.
 3. `providerOverrides` applies only alongside the resolved `providersInclude` and only
    to providers named there — anything else is dropped rather than sent, because the
    server rejects an override naming a provider the request did not select.
 
-Each rule that drops something says so in `options.warnings`.
+Each rule that drops something says so in `options.warnings`; a refused search says so
+in `options.refusal`.
 
 The **client itself never reads these files** — a library must not let a checked-out
 repository steer an arbitrary program's spend. It does read

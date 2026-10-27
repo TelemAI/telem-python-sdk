@@ -47,6 +47,21 @@ def _csv_env(name: str) -> list[str] | None:
     return [item for item in items if item] or None
 
 
+def _providers_refusal(include: list[str], include_from_call: bool, exclude_from_call: bool) -> str:
+    """The message for an ``include`` that ``exclude`` empties: where each list was set."""
+
+    def where(half: str, from_call: bool) -> str:
+        return f"the {half} argument" if from_call else f"default_{half} or TELEM_{half.upper()}"
+
+    names = ", ".join(include)
+    return (
+        f"providers_exclude removes every provider in providers_include ({names}), so no "
+        f"provider is left and no search was sent. Remove {names} from providers_include "
+        f"(set by {where('providers_include', include_from_call)}) or from providers_exclude "
+        f"(set by {where('providers_exclude', exclude_from_call)})."
+    )
+
+
 def _flag_env(name: str) -> bool | None:
     """Parse a boolean env var: exactly ``"1"`` means True, anything else is unset."""
     return True if os.environ.get(name) == "1" else None
@@ -195,7 +210,8 @@ class BaseClient:
            never carries both.
         2. When both provider halves resolve, ``include`` fully determines the set: the
            excluded names are subtracted client-side and ``exclude`` is not sent. An include
-           emptied by that subtraction is still sent, as ``[]``.
+           emptied by that subtraction raises ``ValueError`` before anything is sent: no
+           provider is left, and the deployment's default set could hold an excluded one.
 
         Returns:
             The ``search`` block, containing exactly the options that are set (``{}`` when
@@ -219,7 +235,14 @@ class BaseClient:
         )
         if include is not None and exclude is not None:
             excluded = set(exclude)
-            include = [name for name in include if name not in excluded]
+            kept = [name for name in include if name not in excluded]
+            if include and not kept:
+                raise ValueError(
+                    _providers_refusal(
+                        include, providers_include is not None, providers_exclude is not None
+                    )
+                )
+            include = kept
             exclude = None
 
         if include_full_content is None:
