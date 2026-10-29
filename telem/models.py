@@ -137,6 +137,9 @@ class ProviderInfo(BaseModel):
     url: str | None = None
     normalized: bool = False
     tiers: list[str] = Field(default_factory=list)
+    #: Whether auto-routing can pick it for a ranked topic. ``None`` from a router
+    #: that does not say.
+    auto_routed: bool | None = None
 
 
 class SessionSummary(BaseModel):
