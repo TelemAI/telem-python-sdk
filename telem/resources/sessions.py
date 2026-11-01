@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from telem._base import path_segment
 from telem.models import SessionHistory, SessionResults, SessionSummary
 
 if TYPE_CHECKING:
@@ -71,7 +72,9 @@ class SessionsResource:
         Returns:
             A :class:`SessionHistory` with pass-through interaction records.
         """
-        data = self._client._get(f"/v1/sessions/{session_id}/history", params=_history_params(full))
+        data = self._client._get(
+            f"/v1/sessions/{path_segment(session_id)}/history", params=_history_params(full)
+        )
         return _history_from(data)
 
     def results(self, session_id: str) -> SessionResults:
@@ -83,7 +86,9 @@ class SessionsResource:
         Returns:
             A :class:`SessionResults` with the query/goal/context and per-step results.
         """
-        data = self._client._get(f"/v1/sessions/{session_id}/websearch-preprocessor-results")
+        data = self._client._get(
+            f"/v1/sessions/{path_segment(session_id)}/websearch-preprocessor-results"
+        )
         return _results_from(data)
 
 
@@ -115,7 +120,7 @@ class AsyncSessionsResource:
             A :class:`SessionHistory` with pass-through interaction records.
         """
         data = await self._client._get(
-            f"/v1/sessions/{session_id}/history", params=_history_params(full)
+            f"/v1/sessions/{path_segment(session_id)}/history", params=_history_params(full)
         )
         return _history_from(data)
 
@@ -128,5 +133,7 @@ class AsyncSessionsResource:
         Returns:
             A :class:`SessionResults` with the query/goal/context and per-step results.
         """
-        data = await self._client._get(f"/v1/sessions/{session_id}/websearch-preprocessor-results")
+        data = await self._client._get(
+            f"/v1/sessions/{path_segment(session_id)}/websearch-preprocessor-results"
+        )
         return _results_from(data)

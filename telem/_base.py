@@ -11,6 +11,7 @@ import os
 from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -50,6 +51,14 @@ def _csv_env(name: str) -> list[str] | None:
         return None
     items = [item.strip() for item in raw.split(",")]
     return [item for item in items if item] or None
+
+
+def path_segment(value: str) -> str:
+    """Encode a caller-supplied id as ONE path segment, so ``../`` cannot change the route."""
+    # quote() leaves dots alone, and httpx collapses a bare ``..`` segment.
+    if value in (".", ".."):
+        raise ValueError(f"invalid id: {value!r}")
+    return quote(value, safe="")
 
 
 def _providers_refusal(include: list[str], include_from_call: bool, exclude_from_call: bool) -> str:
@@ -123,7 +132,9 @@ class BaseClient:
             credentials = read_credentials(os.environ)
             resolved_key = resolved_key or credentials.get("apiKey")
             resolved_base = resolved_base or credentials.get("baseUrl")
-        self.api_key = resolved_key
+        # Stripped: ``$(cat keyfile)`` leaves a trailing newline, which httpx rejects
+        # as an illegal header value.
+        self.api_key = resolved_key.strip() if resolved_key else resolved_key
         self.base_url = (resolved_base or _DEFAULT_BASE_URL).rstrip("/")
         self.timeout = timeout
         self.user_agent = user_agent or _DEFAULT_USER_AGENT
@@ -455,8 +466,11 @@ class BaseClient:
 
     def _connection_error(self, path: str, exc: Exception) -> TelemConnectionError:
         """Wrap a transport-level failure (no HTTP response was produced) for ``path``."""
+        # A LocalProtocolError is a fault in the request we built, and its text can quote
+        # a header value (the Authorization key), so its text is never echoed.
+        detail = "" if isinstance(exc, httpx.LocalProtocolError) else f": {exc}"
         return TelemConnectionError(
-            f"could not reach {self._url(path)}: {type(exc).__name__}: {exc}"
+            f"could not reach {self._url(path)}: {type(exc).__name__}{detail}"
         )
 
     @staticmethod

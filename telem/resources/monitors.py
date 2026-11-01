@@ -7,6 +7,7 @@ import hmac
 import time
 from typing import TYPE_CHECKING, Any
 
+from telem._base import path_segment
 from telem._normalize import build_search_response
 from telem.errors import TelemTimeoutError
 from telem.models import Monitor, SearchResponse
@@ -113,7 +114,7 @@ def _monitors_from(data: Any) -> list[Monitor]:
 def _path(monitor_id: str, suffix: str = "") -> str:
     if not monitor_id:
         raise ValueError("a monitor id is required")
-    return f"/v1/monitors/{monitor_id}{suffix}"
+    return f"/v1/monitors/{path_segment(monitor_id)}{suffix}"
 
 
 class MonitorsResource:
