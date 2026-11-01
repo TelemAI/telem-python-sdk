@@ -25,6 +25,7 @@ def _create_body(
     ttl: str | None,
     search: dict[str, Any] | None,
     include_domains: list[str] | None,
+    agent: bool | None,
 ) -> dict[str, Any]:
     options: dict[str, Any] = {}
     if frequency is not None:
@@ -40,6 +41,8 @@ def _create_body(
         body["webhook_url"] = webhook_url
     if ttl is not None:
         body["ttl"] = ttl
+    if agent is not None:
+        body["agent"] = agent
     return body
 
 
@@ -133,6 +136,7 @@ class MonitorsResource:
         ttl: str | None = None,
         search: dict[str, Any] | None = None,
         include_domains: list[str] | None = None,
+        agent: bool | None = None,
     ) -> Monitor:
         """Create a monitor. Telem runs ``query`` on the schedule.
 
@@ -149,12 +153,17 @@ class MonitorsResource:
                 ``{}`` uses the defaults.
             include_domains: Only results from these sites and their subdomains, such as
                 ``["sec.gov"]``, from every source of the monitor.
+            agent: Start the monitor agent with the monitor: it checks every result
+                against ``query`` and keeps the ones that match. Telem turns it on when
+                you leave this out; ``False`` creates the monitor without one.
 
         Returns:
             The new :class:`Monitor`. With ``webhook_url``, its ``webhook_secret``
             signs the deliveries; Telem shows it only in this response.
         """
-        body = _create_body(query, frequency, metadata, webhook_url, ttl, search, include_domains)
+        body = _create_body(
+            query, frequency, metadata, webhook_url, ttl, search, include_domains, agent
+        )
         try:
             data = self._client._post("/v1/monitors", body)
         except TelemTimeoutError as exc:
@@ -237,9 +246,12 @@ class AsyncMonitorsResource:
         ttl: str | None = None,
         search: dict[str, Any] | None = None,
         include_domains: list[str] | None = None,
+        agent: bool | None = None,
     ) -> Monitor:
         """Create a monitor. See :meth:`MonitorsResource.create`."""
-        body = _create_body(query, frequency, metadata, webhook_url, ttl, search, include_domains)
+        body = _create_body(
+            query, frequency, metadata, webhook_url, ttl, search, include_domains, agent
+        )
         try:
             data = await self._client._post("/v1/monitors", body)
         except TelemTimeoutError as exc:
