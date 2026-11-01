@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from telem._base import path_segment
 from telem._normalize import build_search_response
 from telem.errors import TelemTimeoutError
-from telem.models import Monitor, SearchResponse
+from telem.models import Monitor, MonitorPage, SearchResponse
 
 if TYPE_CHECKING:
     from telem.async_client import AsyncTelem
@@ -101,17 +101,21 @@ def _poll_body(session: str | None, metadata: dict[str, Any] | None) -> dict[str
     return body
 
 
-def _list_params(limit: int | None) -> dict[str, Any] | None:
-    return {"limit": limit} if limit is not None else None
+def _list_params(limit: int | None, cursor: str | None) -> dict[str, Any] | None:
+    params: dict[str, Any] = {}
+    if limit is not None:
+        params["limit"] = limit
+    if cursor is not None:
+        params["cursor"] = cursor
+    return params or None
 
 
 #: Added to a create that timed out: the router may have made the monitor anyway.
 _MAY_EXIST = "The monitor may exist: list monitors before you create it again."
 
 
-def _monitors_from(data: Any) -> list[Monitor]:
-    items = data.get("monitors", []) if isinstance(data, dict) else []
-    return [Monitor.model_validate(item) for item in items]
+def _page_from(data: Any) -> MonitorPage:
+    return MonitorPage.model_validate(data if isinstance(data, dict) else {})
 
 
 def _path(monitor_id: str, suffix: str = "") -> str:
@@ -170,13 +174,23 @@ class MonitorsResource:
             raise TelemTimeoutError(f"{exc.message}. {_MAY_EXIST}") from exc
         return Monitor.model_validate(data)
 
-    def list(self, *, limit: int | None = None) -> list[Monitor]:
-        """List your monitors, newest first.
+    def list(self, *, limit: int | None = None, cursor: str | None = None) -> list[Monitor]:
+        """List your monitors, newest first. :meth:`list_page` also gives the next cursor.
 
         Args:
             limit: How many to return (server default 50, maximum 200).
+            cursor: The ``next_cursor`` of the page before.
         """
-        return _monitors_from(self._client._get("/v1/monitors", params=_list_params(limit)))
+        return self.list_page(limit=limit, cursor=cursor).monitors
+
+    def list_page(self, *, limit: int | None = None, cursor: str | None = None) -> MonitorPage:
+        """One page of your monitors, newest first, and the cursor of the next page.
+
+        Args:
+            limit: How many to return (server default 50, maximum 200).
+            cursor: The ``next_cursor`` of the page before.
+        """
+        return _page_from(self._client._get("/v1/monitors", params=_list_params(limit, cursor)))
 
     def get(self, monitor_id: str) -> Monitor:
         """Get one monitor."""
@@ -258,10 +272,16 @@ class AsyncMonitorsResource:
             raise TelemTimeoutError(f"{exc.message}. {_MAY_EXIST}") from exc
         return Monitor.model_validate(data)
 
-    async def list(self, *, limit: int | None = None) -> list[Monitor]:
+    async def list(self, *, limit: int | None = None, cursor: str | None = None) -> list[Monitor]:
         """List your monitors, newest first. See :meth:`MonitorsResource.list`."""
-        data = await self._client._get("/v1/monitors", params=_list_params(limit))
-        return _monitors_from(data)
+        return (await self.list_page(limit=limit, cursor=cursor)).monitors
+
+    async def list_page(
+        self, *, limit: int | None = None, cursor: str | None = None
+    ) -> MonitorPage:
+        """One page of your monitors. See :meth:`MonitorsResource.list_page`."""
+        data = await self._client._get("/v1/monitors", params=_list_params(limit, cursor))
+        return _page_from(data)
 
     async def get(self, monitor_id: str) -> Monitor:
         """Get one monitor."""

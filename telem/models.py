@@ -186,13 +186,23 @@ class Monitor(BaseModel):
     id: str
     query: str
     frequency: str
-    #: ``active`` or ``paused`` (you paused it).
+    #: ``active``, ``paused`` (you paused it) or ``ended`` (past ``expires_at``).
     status: str
     session_id: str
     created_at: str
     last_polled_at: str | None = None
-    #: When Telem deletes the monitor; ``None``: never.
+    #: When the monitor ends; ``None``: never.
     expires_at: str | None = None
     webhook_url: str | None = None
     #: Signs the webhook deliveries. Only in the response that set ``webhook_url``.
     webhook_secret: str | None = None
+
+
+class MonitorPage(BaseModel):
+    """One page of :meth:`~telem.resources.monitors.MonitorsResource.list_page`."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    monitors: list[Monitor] = []
+    #: Pass as ``cursor`` to get the next page; ``None`` on the last page.
+    next_cursor: str | None = None
