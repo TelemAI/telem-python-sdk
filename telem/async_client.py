@@ -45,7 +45,8 @@ class AsyncTelem(BaseClient):
         Args:
             api_key: Bearer token. Falls back to the ``TELEM_API_KEY`` env var, then to
                 ``~/.telem/credentials.json`` (the file the guided installer writes;
-                ``TELEM_CONFIG_DIR`` relocates the directory), then anonymous.
+                ``TELEM_CONFIG_DIR`` relocates the directory), then anonymous. An empty
+                ``api_key`` raises ``ValueError``.
             base_url: API base URL. Falls back to ``TELEM_BASE_URL``, then to the same
                 credentials file, then the hosted deployment at router.telem.ai.
             timeout: Request timeout in seconds.
@@ -85,7 +86,9 @@ class AsyncTelem(BaseClient):
         """Issue a GET request and return the parsed body (raising typed errors on failure)."""
         try:
             response = await self._client.get(self._url(path), params=params)
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
+        except httpx.TimeoutException as exc:
+            raise self._timeout_error(path, exc) from exc
+        except httpx.TransportError as exc:
             raise self._connection_error(path, exc) from exc
         return self._result(response)
 
@@ -93,7 +96,9 @@ class AsyncTelem(BaseClient):
         """Issue a POST request and return the parsed body (raising typed errors on failure)."""
         try:
             response = await self._client.post(self._url(path), json=json)
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
+        except httpx.TimeoutException as exc:
+            raise self._timeout_error(path, exc) from exc
+        except httpx.TransportError as exc:
             raise self._connection_error(path, exc) from exc
         return self._result(response)
 
@@ -101,7 +106,9 @@ class AsyncTelem(BaseClient):
         """Issue a PATCH/DELETE request and return the parsed body (typed errors on failure)."""
         try:
             response = await self._client.request(method, self._url(path), json=json)
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
+        except httpx.TimeoutException as exc:
+            raise self._timeout_error(path, exc) from exc
+        except httpx.TransportError as exc:
             raise self._connection_error(path, exc) from exc
         return self._result(response)
 

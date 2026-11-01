@@ -16,7 +16,12 @@ import httpx
 
 from telem._config_files import TELEM_OPTIONS, option_from_env, read_credentials
 from telem._version import __version__
-from telem.errors import TelemConnectionError, TelemServerVersionError, raise_for_status
+from telem.errors import (
+    TelemConnectionError,
+    TelemServerVersionError,
+    TelemTimeoutError,
+    raise_for_status,
+)
 
 #: The hosted deployment. A default rather than a requirement: an ordinary user
 #: should not have to know where Telem runs, and `TELEM_BASE_URL` or the
@@ -110,6 +115,8 @@ class BaseClient:
         # This is the SDK's ONE config file. Repo-local `.telem/telem.json` options stay
         # unread here on purpose: a library must not let a checked-out
         # repository steer an arbitrary program's spend.
+        if api_key is not None and not api_key.strip():
+            raise ValueError("api_key is empty")
         resolved_key = api_key or os.environ.get("TELEM_API_KEY") or None
         resolved_base = base_url or os.environ.get("TELEM_BASE_URL") or None
         if resolved_key is None or resolved_base is None:
@@ -492,6 +499,14 @@ class BaseClient:
         """
         raise_for_status(status_code, body)
         return body
+
+    def _timeout_error(self, path: str, exc: Exception) -> TelemTimeoutError:
+        """Wrap a timeout for ``path``: the server may have got the request, so it is not
+        "could not reach"."""
+        return TelemTimeoutError(
+            f"request to {self._url(path)} timed out after {self.timeout} s: "
+            f"{type(exc).__name__}: {exc}"
+        )
 
     @classmethod
     def _result(cls, response: httpx.Response) -> Any:

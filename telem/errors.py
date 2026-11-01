@@ -49,6 +49,17 @@ class TelemConnectionError(TelemError):
     """Raised when the request never produced an HTTP response (timeout or transport failure)."""
 
 
+class TelemTimeoutError(TelemConnectionError):
+    """Raised when the request timed out. The server may have got it and acted on it."""
+
+
+#: The message for a request that the firewall in front of Telem blocked.
+BLOCKED_MESSAGE = (
+    "The request was blocked by a firewall before it reached Telem; "
+    "the text may have characters that are not allowed."
+)
+
+
 def _detail_from_body(body: object) -> str | None:
     """Extract a human-readable message from a parsed JSON error body, if present.
 
@@ -83,7 +94,8 @@ def raise_for_status(status_code: int, body: object) -> None:
     """Raise the appropriate :class:`TelemError` subclass for a non-2xx response.
 
     Maps status codes to exception types:
-    400 -> :class:`BadRequestError`, 401/403 -> :class:`AuthError`,
+    400 -> :class:`BadRequestError`, 401/403 -> :class:`AuthError` (a 403 whose body is
+    not JSON -> :class:`APIStatusError`: a firewall blocked it before it reached Telem),
     404 -> :class:`NotFoundError`, any other non-2xx -> :class:`APIStatusError`.
     2xx status codes are treated as success and do not raise.
 
@@ -97,6 +109,10 @@ def raise_for_status(status_code: int, body: object) -> None:
         return
 
     detail = _detail_from_body(body)
+    if status_code == 403 and not isinstance(body, dict):
+        # Telem's own 403 is JSON. A non-JSON one comes from the firewall in front of
+        # Telem: the key is not the problem.
+        raise APIStatusError(BLOCKED_MESSAGE, status_code=status_code, body=body)
     if status_code == 400:
         message = detail or "Bad request"
         raise BadRequestError(message, status_code=status_code, body=body)

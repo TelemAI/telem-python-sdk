@@ -93,6 +93,7 @@ def _provider_run(run: Any) -> ProviderRun:
         verticals=envelope.get("verticals"),
         usage=envelope.get("usage"),
         warnings=envelope.get("warnings", []),
+        same_story=envelope.get("same_story"),
     )
 
 

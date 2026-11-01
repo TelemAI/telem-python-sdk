@@ -58,6 +58,8 @@ class ProviderRun(BaseModel):
     verticals: dict[str, Any] | None = None
     usage: dict[str, Any] | list[Any] | None = None
     warnings: list[dict[str, Any]] = Field(default_factory=list)
+    # Monitor polls: results folded as the same story, {lead url: [{url, title}]}
+    same_story: dict[str, list[dict[str, Any]]] | None = None
     raw: dict[str, Any] | None = None
 
 

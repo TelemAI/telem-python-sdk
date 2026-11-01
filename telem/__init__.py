@@ -16,6 +16,7 @@ from telem.errors import (
     TelemConnectionError,
     TelemError,
     TelemServerVersionError,
+    TelemTimeoutError,
 )
 from telem.models import (
     FetchResponse,
@@ -54,6 +55,7 @@ __all__ = [
     "APIStatusError",
     "TelemServerVersionError",
     "TelemConnectionError",
+    "TelemTimeoutError",
     # The unified config — read explicitly, never by the client itself.
     "resolve_search_options",
     "SearchOptionsResolution",

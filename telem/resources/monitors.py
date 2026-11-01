@@ -8,6 +8,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from telem._normalize import build_search_response
+from telem.errors import TelemTimeoutError
 from telem.models import Monitor, SearchResponse
 
 if TYPE_CHECKING:
@@ -100,6 +101,10 @@ def _list_params(limit: int | None) -> dict[str, Any] | None:
     return {"limit": limit} if limit is not None else None
 
 
+#: Added to a create that timed out: the router may have made the monitor anyway.
+_MAY_EXIST = "The monitor may exist: list monitors before you create it again."
+
+
 def _monitors_from(data: Any) -> list[Monitor]:
     items = data.get("monitors", []) if isinstance(data, dict) else []
     return [Monitor.model_validate(item) for item in items]
@@ -149,7 +154,11 @@ class MonitorsResource:
             signs the deliveries; Telem shows it only in this response.
         """
         body = _create_body(query, frequency, metadata, webhook_url, ttl, search, include_domains)
-        return Monitor.model_validate(self._client._post("/v1/monitors", body))
+        try:
+            data = self._client._post("/v1/monitors", body)
+        except TelemTimeoutError as exc:
+            raise TelemTimeoutError(f"{exc.message}. {_MAY_EXIST}") from exc
+        return Monitor.model_validate(data)
 
     def list(self, *, limit: int | None = None) -> list[Monitor]:
         """List your monitors, newest first.
@@ -230,7 +239,11 @@ class AsyncMonitorsResource:
     ) -> Monitor:
         """Create a monitor. See :meth:`MonitorsResource.create`."""
         body = _create_body(query, frequency, metadata, webhook_url, ttl, search, include_domains)
-        return Monitor.model_validate(await self._client._post("/v1/monitors", body))
+        try:
+            data = await self._client._post("/v1/monitors", body)
+        except TelemTimeoutError as exc:
+            raise TelemTimeoutError(f"{exc.message}. {_MAY_EXIST}") from exc
+        return Monitor.model_validate(data)
 
     async def list(self, *, limit: int | None = None) -> list[Monitor]:
         """List your monitors, newest first. See :meth:`MonitorsResource.list`."""
