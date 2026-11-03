@@ -167,9 +167,20 @@ your last poll. `poll` returns a `SearchResponse`:
 ```python
 monitor = client.monitors.create("Nvidia files a new 8-K with the SEC", frequency="1h", ttl="7d")
 response = client.monitors.poll(monitor.id)
+for change in client.monitors.iter_changes(monitor.id):
+    print(change.seq, change.kind, change.subject.name)
 client.monitors.update(monitor.id, status="paused")
 client.monitors.delete(monitor.id)
 ```
+
+A monitor has an agent unless you create it with `agent=False`. The agent checks every
+result against the query and keeps the ones that match. `iter_changes` reads what it
+kept, oldest first, until you are caught up, and then stops. Keep the `seq` of the last
+change you handled and pass it as `cursor` next time: no change comes twice, and none
+is skipped. `changes` returns one page (`next_cursor`, `watermark`) and takes
+`cursor`, `since`, `kinds` and `limit`. `agent` returns the agent itself, and
+`monitor.agent_state` shows it on the monitor. With `AsyncTelem`, read `iter_changes`
+with `async for`.
 
 `client.monitors` also has `get` and `list`. See [Monitors](https://docs.telem.ai/resources/monitors/)
 for the fields and the errors.

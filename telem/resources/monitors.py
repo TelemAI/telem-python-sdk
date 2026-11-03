@@ -1,16 +1,26 @@
-"""Monitors: a query that Telem runs on a schedule, read back with ``poll``."""
+"""Monitors: a query that Telem runs on a schedule, read back with ``poll`` or, with the
+monitor agent, with ``changes``."""
 
 from __future__ import annotations
 
 import hashlib
 import hmac
 import time
+from collections.abc import AsyncIterator, Iterator
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from telem._base import path_segment
+from telem._base import _iso, path_segment
 from telem._normalize import build_search_response
 from telem.errors import TelemTimeoutError
-from telem.models import Monitor, MonitorPage, SearchResponse
+from telem.models import (
+    AgentDocument,
+    ChangeRecord,
+    ChangesPage,
+    Monitor,
+    MonitorPage,
+    SearchResponse,
+)
 
 if TYPE_CHECKING:
     from telem.async_client import AsyncTelem
@@ -110,12 +120,48 @@ def _list_params(limit: int | None, cursor: str | None) -> dict[str, Any] | None
     return params or None
 
 
+def _changes_params(
+    cursor: int | None,
+    since: str | datetime | None,
+    kinds: list[str] | None,
+    limit: int | None,
+) -> dict[str, Any] | None:
+    """The query of a changes read: what the caller set, and nothing else."""
+    params: dict[str, Any] = {}
+    if cursor is not None:
+        params["cursor"] = cursor
+    if since is not None:
+        params["since"] = _iso(since)
+    if kinds is not None:
+        # One kind written as a bare string is one kind, not one per letter.
+        params["kinds"] = kinds if isinstance(kinds, str) else ",".join(kinds)
+    if limit is not None:
+        params["limit"] = limit
+    return params or None
+
+
+def _has_more(page: ChangesPage, cursor: int) -> bool:
+    """Whether to read on from ``page.next_cursor``, after a read that started at ``cursor``.
+
+    Only while ``next_cursor`` is below the watermark, which the router answers only to a
+    full page: a shorter page ends at the watermark, and there the reader is caught up.
+    Never after an empty page or a page that did not move the cursor, whatever else it
+    says: the router sends neither below the watermark, and reading on could bring the
+    same page back for ever."""
+    return bool(page.changes) and cursor < page.next_cursor < page.watermark
+
+
 #: Added to a create that timed out: the router may have made the monitor anyway.
 _MAY_EXIST = "The monitor may exist: list monitors before you create it again."
 
 
 def _page_from(data: Any) -> MonitorPage:
     return MonitorPage.model_validate(data if isinstance(data, dict) else {})
+
+
+def _agent_from(data: Any) -> AgentDocument:
+    # The model ignores what it does not name; ``raw`` keeps the whole document.
+    return AgentDocument.model_validate({**data, "raw": data} if isinstance(data, dict) else data)
 
 
 def _path(monitor_id: str, suffix: str = "") -> str:
@@ -159,11 +205,13 @@ class MonitorsResource:
                 ``["sec.gov"]``, from every source of the monitor.
             agent: Start the monitor agent with the monitor: it checks every result
                 against ``query`` and keeps the ones that match. Telem turns it on when
-                you leave this out; ``False`` creates the monitor without one.
+                you leave this out; ``False`` creates the monitor without one. Read
+                what it keeps with :meth:`changes`.
 
         Returns:
             The new :class:`Monitor`. With ``webhook_url``, its ``webhook_secret``
-            signs the deliveries; Telem shows it only in this response.
+            signs the deliveries; Telem shows it only in this response. With the
+            agent on, its ``agent_state`` shows the agent.
         """
         body = _create_body(
             query, frequency, metadata, webhook_url, ttl, search, include_domains, agent
@@ -239,6 +287,84 @@ class MonitorsResource:
         data = self._client._post(_path(monitor_id, "/poll"), _poll_body(session, metadata))
         return build_search_response(data)
 
+    def agent(self, monitor_id: str) -> AgentDocument:
+        """Get the monitor agent: its status, plan version and spend.
+
+        Args:
+            monitor_id: The monitor id.
+
+        Returns:
+            An :class:`AgentDocument`. Its ``raw`` has everything Telem sent.
+
+        Raises:
+            NotFoundError: The monitor has no agent, or it is not yours.
+        """
+        return _agent_from(self._client._get(_path(monitor_id, "/agent")))
+
+    def changes(
+        self,
+        monitor_id: str,
+        *,
+        cursor: int | None = None,
+        since: str | datetime | None = None,
+        kinds: list[str] | None = None,
+        limit: int | None = None,
+    ) -> ChangesPage:
+        """One page of what the monitor agent changed, oldest first.
+
+        Keep the ``next_cursor`` of the page and pass it as ``cursor`` to read on: a
+        change never comes twice, and none is skipped. You are caught up when
+        ``next_cursor`` reaches ``watermark``, or when a page is empty.
+        :meth:`iter_changes` does this for you.
+
+        Args:
+            monitor_id: The monitor id.
+            cursor: Read the changes after this ``seq``. Without it, the read starts
+                at the first change.
+            since: Start at a time instead of a cursor, and not together with one. A
+                ``datetime`` with no zone is local time. A string needs a zone, such as
+                ``"2026-11-03T09:00:00Z"``.
+            kinds: Only these kinds: ``entity_added``, ``value_changed``,
+                ``fact_status_changed``, ``alert``, ``run`` or ``plan_changed``. Any
+                other name is a ``BadRequestError``; an empty list keeps every kind.
+            limit: How many changes to return at most (server default 200, maximum 500).
+
+        Returns:
+            A :class:`ChangesPage`.
+
+        Raises:
+            BadRequestError: Both ``cursor`` and ``since`` were sent (``cursor_conflict``),
+                or ``kinds`` names a kind that is not one of the six (``kinds_invalid``).
+            NotFoundError: The monitor has no agent, or it is not yours.
+        """
+        params = _changes_params(cursor, since, kinds, limit)
+        data = self._client._get(_path(monitor_id, "/agent/changes"), params=params)
+        return ChangesPage.model_validate(data)
+
+    def iter_changes(self, monitor_id: str, *, cursor: int = 0) -> Iterator[ChangeRecord]:
+        """Every change after ``cursor``, oldest first, page by page until you are caught up.
+
+        It reads what is there now and then stops; it does not wait for more. To follow
+        the agent, call it again later from the ``seq`` of the last change you handled::
+
+            for change in client.monitors.iter_changes(monitor.id, cursor=saved):
+                handle(change)
+                saved = change.seq
+
+        Args:
+            monitor_id: The monitor id.
+            cursor: Start after this ``seq``. ``0`` starts at the first change.
+
+        Yields:
+            :class:`ChangeRecord`, in the order of ``seq``.
+        """
+        while True:
+            page = self.changes(monitor_id, cursor=cursor)
+            yield from page.changes
+            if not _has_more(page, cursor):
+                return
+            cursor = page.next_cursor
+
     def delete(self, monitor_id: str) -> None:
         """Delete a monitor. A repeat deletes what a failed delete left."""
         self._client._request("DELETE", _path(monitor_id))
@@ -310,6 +436,39 @@ class AsyncMonitorsResource:
         """Get the results that are new since the last poll. See :meth:`MonitorsResource.poll`."""
         body = _poll_body(session, metadata)
         return build_search_response(await self._client._post(_path(monitor_id, "/poll"), body))
+
+    async def agent(self, monitor_id: str) -> AgentDocument:
+        """Get the monitor agent. See :meth:`MonitorsResource.agent`."""
+        return _agent_from(await self._client._get(_path(monitor_id, "/agent")))
+
+    async def changes(
+        self,
+        monitor_id: str,
+        *,
+        cursor: int | None = None,
+        since: str | datetime | None = None,
+        kinds: list[str] | None = None,
+        limit: int | None = None,
+    ) -> ChangesPage:
+        """One page of what the monitor agent changed. See :meth:`MonitorsResource.changes`."""
+        params = _changes_params(cursor, since, kinds, limit)
+        data = await self._client._get(_path(monitor_id, "/agent/changes"), params=params)
+        return ChangesPage.model_validate(data)
+
+    async def iter_changes(
+        self, monitor_id: str, *, cursor: int = 0
+    ) -> AsyncIterator[ChangeRecord]:
+        """Every change after ``cursor``, until you are caught up.
+
+        Use it with ``async for``. See :meth:`MonitorsResource.iter_changes`.
+        """
+        while True:
+            page = await self.changes(monitor_id, cursor=cursor)
+            for change in page.changes:
+                yield change
+            if not _has_more(page, cursor):
+                return
+            cursor = page.next_cursor
 
     async def delete(self, monitor_id: str) -> None:
         """Delete a monitor. A repeat deletes what a failed delete left."""

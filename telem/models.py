@@ -177,6 +177,38 @@ class SessionResults(BaseModel):
     previous_preprocessor_results: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class AgentCompileState(BaseModel):
+    """The job that makes the agent's plan: ``AgentState.compile``."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    job_id: str
+    status: str
+    #: Why the plan could not be made; ``None`` when it did not fail.
+    error: str | None = None
+
+
+class AgentState(BaseModel):
+    """What the monitor agent is doing: ``Monitor.agent_state``."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    #: The agent engine: ``"v4"`` today.
+    engine: str
+    #: Such as ``compiling``, ``ready``, ``paused`` or ``failed``.
+    status: str
+    #: ``True`` when the agent needs you to look at it, for example after it failed.
+    needs_attention: bool = False
+    #: The version of the agent's plan; ``None`` until the first plan is made.
+    plan_version: int | None = None
+    #: When the agent runs next, as an ISO 8601 time; ``None`` when it is not scheduled.
+    next_run_at: str | None = None
+    #: The ``seq`` of the newest change you can read. ``0``: there is none yet.
+    watermark: int = 0
+    #: The latest job that made the agent's plan; ``None`` when there is none.
+    compile: AgentCompileState | None = None
+
+
 class Monitor(BaseModel):
     """A monitor: a query that Telem runs on a schedule."""
 
@@ -195,6 +227,9 @@ class Monitor(BaseModel):
     webhook_url: str | None = None
     #: Signs the webhook deliveries. Only in the response that set ``webhook_url``.
     webhook_secret: str | None = None
+    #: The monitor agent; ``None`` for a monitor without one (``agent=False``), and from
+    #: a router that does not say.
+    agent_state: AgentState | None = None
 
 
 class MonitorPage(BaseModel):
@@ -205,3 +240,79 @@ class MonitorPage(BaseModel):
     monitors: list[Monitor] = []
     #: Pass as ``cursor`` to get the next page; ``None`` on the last page.
     next_cursor: str | None = None
+
+
+class AgentDocument(BaseModel):
+    """The agent of a monitor: :meth:`~telem.resources.monitors.MonitorsResource.agent`.
+
+    The router sends more than these fields, such as the plan and the counts. All of it
+    is in ``raw``. The document has no ``watermark``: a :class:`ChangesPage` has it, and
+    so does ``Monitor.agent_state``.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    #: Such as ``compiling``, ``ready``, ``paused`` or ``failed``.
+    status: str | None = None
+    query: str | None = None
+    frequency: str | None = None
+    #: The version of the agent's plan; ``0`` until the first plan is made.
+    spec_version: int | None = None
+    #: The agent's spending limits; ``None`` when none are set.
+    budget: dict[str, Any] | None = None
+    #: What the agent has spent so far, in US dollars.
+    spend_usd: float | None = None
+    #: The whole document, as the router sent it.
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChangeSubject(BaseModel):
+    """The item a change is about.
+
+    ``entity_id`` is ``None`` for a change to the whole monitor, such as a run or a plan
+    change.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    entity_id: str | None = None
+    name: str | None = None
+
+
+class ChangeRecord(BaseModel):
+    """One change of the monitor agent: the records of :class:`ChangesPage`."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    #: Where the change is in the stream. It only grows. Pass the last one you handled
+    #: as ``cursor`` to read on from there.
+    seq: int
+    #: The agent's own name for the change, such as ``new_object`` or ``tick``.
+    type: str
+    #: ``entity_added``, ``value_changed``, ``fact_status_changed``, ``alert``, ``run``
+    #: or ``plan_changed``.
+    kind: str
+    monitor_id: str
+    subject: ChangeSubject = Field(default_factory=ChangeSubject)
+    #: The value before and after the change. Any JSON, and ``None`` when there is none.
+    before: Any = None
+    after: Any = None
+    fact_ids: list[str] = Field(default_factory=list)
+    #: When the change happened, as an ISO 8601 time.
+    at: str
+
+
+class ChangesPage(BaseModel):
+    """One page of :meth:`~telem.resources.monitors.MonitorsResource.changes`."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    #: Oldest first.
+    changes: list[ChangeRecord] = Field(default_factory=list)
+    #: Keep it, and pass it as ``cursor`` to read on. On a full page (``limit`` changes) it
+    #: is the ``seq`` of the last change. On a shorter page it is ``watermark``: the read
+    #: got that far, past the changes that ``kinds`` left out too.
+    next_cursor: int
+    #: The ``seq`` of the newest change you can read now. You are caught up when
+    #: ``next_cursor`` reaches it.
+    watermark: int
