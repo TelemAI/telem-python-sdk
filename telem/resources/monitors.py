@@ -1,11 +1,15 @@
-"""Monitors: a query that Telem runs on a schedule, read back with ``poll`` or, with the
-monitor agent, with ``changes``."""
+"""Monitors: a query that Telem runs on a schedule, with an agent that keeps what matches.
+
+A monitor has the agent unless it is created with ``agent=False``, and a monitor with the
+agent must end, so its create needs a ``ttl``. Read what the agent finds with ``changes`` or
+``iter_changes``. ``poll`` reads a monitor's own results and is deprecated."""
 
 from __future__ import annotations
 
 import hashlib
 import hmac
 import time
+import warnings
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -27,6 +31,13 @@ if TYPE_CHECKING:
     from telem.client import Telem
 
 
+#: Why a create with the agent and no ``ttl`` is refused before anything is sent.
+_NEEDS_TTL = (
+    'A monitor with an agent must end: pass ttl, such as ttl="30d" (at most 30 days), '
+    "or agent=False for a monitor without an agent."
+)
+
+
 def _create_body(
     query: str,
     frequency: str | None,
@@ -37,6 +48,10 @@ def _create_body(
     include_domains: list[str] | None,
     agent: bool | None,
 ) -> dict[str, Any]:
+    # An explicit ``None`` is the default, as it was before: the agent is on.
+    agent_on = True if agent is None else bool(agent)
+    if agent_on and not ttl:
+        raise ValueError(_NEEDS_TTL)
     options: dict[str, Any] = {}
     if frequency is not None:
         options["frequency"] = frequency
@@ -51,8 +66,7 @@ def _create_body(
         body["webhook_url"] = webhook_url
     if ttl is not None:
         body["ttl"] = ttl
-    if agent is not None:
-        body["agent"] = agent
+    body["agent"] = agent_on
     return body
 
 
@@ -73,8 +87,9 @@ def _update_body(
     status: str | None,
     frequency: str | None,
     webhook_url: str | None,
+    ttl: str | None,
 ) -> dict[str, Any]:
-    body = {"status": status, "frequency": frequency}
+    body = {"status": status, "frequency": frequency, "ttl": ttl}
     body = {key: value for key, value in body.items() if value is not None}
     if webhook_url is not None:
         body["webhook_url"] = webhook_url or None  # "" removes the webhook
@@ -100,6 +115,30 @@ def verify_webhook(body: bytes | str, header: str, secret: str, *, tolerance: in
     raw = body.encode() if isinstance(body, str) else body
     expected = hmac.new(secret.encode(), f"{timestamp}.".encode() + raw, hashlib.sha256)
     return hmac.compare_digest(expected.hexdigest(), signature)
+
+
+#: Whether this process has been told that ``poll`` is deprecated: it is told once.
+_poll_warned = False
+
+_POLL_DEPRECATED = (
+    "monitors.poll() is deprecated: read what the monitor agent finds with "
+    "monitors.iter_changes() or monitors.changes()."
+)
+
+
+def _warn_poll_deprecated() -> None:
+    """Warn that ``poll`` is deprecated, the first time this process polls.
+
+    The warning points at the caller's line, not at this module. It is marked as given
+    only once it is given, so a caller that turns warnings into errors gets the error
+    on every poll, not on the first one alone.
+    """
+    global _poll_warned
+    if _poll_warned:
+        return
+    # 1 is this function, 2 the poll method, 3 the code that called it.
+    warnings.warn(_POLL_DEPRECATED, DeprecationWarning, stacklevel=3)
+    _poll_warned = True
 
 
 def _poll_body(session: str | None, metadata: dict[str, Any] | None) -> dict[str, Any]:
@@ -186,32 +225,39 @@ class MonitorsResource:
         ttl: str | None = None,
         search: dict[str, Any] | None = None,
         include_domains: list[str] | None = None,
-        agent: bool | None = None,
+        agent: bool = True,
     ) -> Monitor:
-        """Create a monitor. Telem runs ``query`` on the schedule.
+        """Create a monitor. Telem runs ``query`` on the schedule, and its agent checks
+        every result against ``query`` and keeps the ones that match.
 
         Args:
             query: What to watch for, as a plain sentence.
             frequency: ``"1h"``, ``"6h"``, ``"12h"``, ``"1d"`` or ``"7d"``. If you leave it
                 out, the monitor runs once a day.
-            metadata: Request metadata (query lineage keys), as in a search.
+            metadata: Query lineage keys, as in a search. They choose the session that
+                records the polls of the monitor.
             webhook_url: An ``https`` URL that receives the new results.
-            ttl: Delete the monitor after this long, such as ``"12h"`` or ``"7d"``
-                (at most ``"30d"``). Without it, the monitor never expires.
+            ttl: End the monitor after this long, such as ``"7d"`` or ``"30d"`` (at most
+                ``"30d"``). Required with the agent. Without the agent, the monitor never
+                ends if you leave it out.
             search: Also run a web search for ``query`` on the schedule, with these
                 search options, named as in :meth:`Telem.search`: ``num_results`` and ``tier``.
-                ``{}`` uses the defaults.
+                ``{}`` uses the defaults. It adds to what a poll returns.
             include_domains: Only results from these sites and their subdomains, such as
-                ``["sec.gov"]``, from every source of the monitor.
-            agent: Start the monitor agent with the monitor: it checks every result
-                against ``query`` and keeps the ones that match. Telem turns it on when
-                you leave this out; ``False`` creates the monitor without one. Read
-                what it keeps with :meth:`changes`.
+                ``["sec.gov"]``, in what a poll returns.
+            agent: ``True`` (the default) starts the monitor agent with the monitor. Read
+                what it keeps with :meth:`iter_changes` or :meth:`changes`. ``False``
+                creates a monitor without an agent, which you read with the deprecated
+                :meth:`poll`.
 
         Returns:
-            The new :class:`Monitor`. With ``webhook_url``, its ``webhook_secret``
-            signs the deliveries; Telem shows it only in this response. With the
-            agent on, its ``agent_state`` shows the agent.
+            The new :class:`Monitor`. Its ``agent_state`` shows the agent. When the agent
+            did not start, ``agent_state`` is ``None`` and ``agent_note`` says why. With
+            ``webhook_url``, its ``webhook_secret`` signs the deliveries; Telem shows it
+            only in this response.
+
+        Raises:
+            ValueError: The agent is on and ``ttl`` is missing. Nothing was sent.
         """
         body = _create_body(
             query, frequency, metadata, webhook_url, ttl, search, include_domains, agent
@@ -251,8 +297,9 @@ class MonitorsResource:
         status: str | None = None,
         frequency: str | None = None,
         webhook_url: str | None = None,
+        ttl: str | None = None,
     ) -> Monitor:
-        """Pause, resume or change a monitor. Send at least one field.
+        """Pause, resume, renew or change a monitor. Send at least one field.
 
         Args:
             monitor_id: The monitor id.
@@ -260,11 +307,13 @@ class MonitorsResource:
             frequency: A new frequency.
             webhook_url: A new webhook URL, with a new ``webhook_secret`` in the
                 response. ``""`` removes the webhook.
+            ttl: A new end, this long from now, such as ``"30d"`` (at most ``"30d"``).
+                It renews a monitor before it ends; an ended monitor cannot be renewed.
 
         Returns:
             The updated :class:`Monitor`.
         """
-        body = _update_body(status, frequency, webhook_url)
+        body = _update_body(status, frequency, webhook_url, ttl)
         return Monitor.model_validate(self._client._request("PATCH", _path(monitor_id), body))
 
     def poll(
@@ -274,7 +323,12 @@ class MonitorsResource:
         session: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> SearchResponse:
-        """Get the results that are new since the last poll.
+        """Get the monitor's own results that are new since the last poll.
+
+        .. deprecated:: 0.4.0
+            Read what the monitor agent finds with :meth:`iter_changes` or
+            :meth:`changes`. A poll still works, and warns once per process
+            (``DeprecationWarning``).
 
         Args:
             monitor_id: The monitor id.
@@ -284,6 +338,7 @@ class MonitorsResource:
         Returns:
             A :class:`SearchResponse`.
         """
+        _warn_poll_deprecated()
         data = self._client._post(_path(monitor_id, "/poll"), _poll_body(session, metadata))
         return build_search_response(data)
 
@@ -386,9 +441,10 @@ class AsyncMonitorsResource:
         ttl: str | None = None,
         search: dict[str, Any] | None = None,
         include_domains: list[str] | None = None,
-        agent: bool | None = None,
+        agent: bool = True,
     ) -> Monitor:
-        """Create a monitor. See :meth:`MonitorsResource.create`."""
+        """Create a monitor. It has the agent unless ``agent=False``, and with the agent
+        ``ttl`` is required. See :meth:`MonitorsResource.create`."""
         body = _create_body(
             query, frequency, metadata, webhook_url, ttl, search, include_domains, agent
         )
@@ -420,9 +476,10 @@ class AsyncMonitorsResource:
         status: str | None = None,
         frequency: str | None = None,
         webhook_url: str | None = None,
+        ttl: str | None = None,
     ) -> Monitor:
-        """Pause, resume or change a monitor. See :meth:`MonitorsResource.update`."""
-        body = _update_body(status, frequency, webhook_url)
+        """Pause, resume, renew or change a monitor. See :meth:`MonitorsResource.update`."""
+        body = _update_body(status, frequency, webhook_url, ttl)
         data = await self._client._request("PATCH", _path(monitor_id), body)
         return Monitor.model_validate(data)
 
@@ -433,7 +490,13 @@ class AsyncMonitorsResource:
         session: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> SearchResponse:
-        """Get the results that are new since the last poll. See :meth:`MonitorsResource.poll`."""
+        """Get the monitor's own results that are new since the last poll.
+
+        .. deprecated:: 0.4.0
+            Read the agent with :meth:`iter_changes` or :meth:`changes`. See
+            :meth:`MonitorsResource.poll`.
+        """
+        _warn_poll_deprecated()
         body = _poll_body(session, metadata)
         return build_search_response(await self._client._post(_path(monitor_id, "/poll"), body))
 

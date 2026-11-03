@@ -161,29 +161,34 @@ client.sessions.results(session_id)         # aggregated websearch preprocessor 
 
 ## Monitors
 
-A monitor runs a query on a schedule. Poll it to get the results that are new since
-your last poll. `poll` returns a `SearchResponse`:
+A monitor runs a query on a schedule, and its agent checks every result against the
+query and keeps the ones that match. A monitor has the agent unless you create it with
+`agent=False`, and a monitor with the agent needs a `ttl`, at most `"30d"`: without one,
+`create` raises `ValueError`.
 
 ```python
-monitor = client.monitors.create("Nvidia files a new 8-K with the SEC", frequency="1h", ttl="7d")
-response = client.monitors.poll(monitor.id)
+monitor = client.monitors.create("Nvidia files a new 8-K with the SEC", frequency="1h", ttl="30d")
+print(monitor.agent_state.status if monitor.agent_state else "no agent")
 for change in client.monitors.iter_changes(monitor.id):
     print(change.seq, change.kind, change.subject.name)
+agent = client.monitors.agent(monitor.id)
 client.monitors.update(monitor.id, status="paused")
+client.monitors.update(monitor.id, ttl="30d")  # renew: it ends 30 days from now
 client.monitors.delete(monitor.id)
 ```
 
-A monitor has an agent unless you create it with `agent=False`. The agent checks every
-result against the query and keeps the ones that match. `iter_changes` reads what it
-kept, oldest first, until you are caught up, and then stops. Keep the `seq` of the last
-change you handled and pass it as `cursor` next time: no change comes twice, and none
-is skipped. `changes` returns one page (`next_cursor`, `watermark`) and takes
-`cursor`, `since`, `kinds` and `limit`. `agent` returns the agent itself, and
-`monitor.agent_state` shows it on the monitor. With `AsyncTelem`, read `iter_changes`
-with `async for`.
+`iter_changes` reads what the agent kept, oldest first, until you are caught up, and
+then stops. Keep the `seq` of the last change you handled and pass it as `cursor` next
+time: no change comes twice, and none is skipped. `changes` returns one page
+(`next_cursor`, `watermark`) and takes `cursor`, `since`, `kinds` and `limit`. `agent`
+returns the agent itself, and `monitor.agent_state` shows it on the monitor; when the
+agent did not start, the create's `monitor.agent_note` says why. With `AsyncTelem`, read
+`iter_changes` with `async for`.
 
-`client.monitors` also has `get` and `list`. See [Monitors](https://docs.telem.ai/resources/monitors/)
-for the fields and the errors.
+`client.monitors` also has `get` and `list`. `poll` is deprecated and warns once:
+read the agent's changes with `iter_changes` instead.
+See [Monitors](https://docs.telem.ai/resources/monitors/) for the fields, the errors and
+the older reads.
 
 ## LangChain and LangGraph integration
 

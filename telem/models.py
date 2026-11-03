@@ -230,6 +230,9 @@ class Monitor(BaseModel):
     #: The monitor agent; ``None`` for a monitor without one (``agent=False``), and from
     #: a router that does not say.
     agent_state: AgentState | None = None
+    #: Only in the answer to a create: why the monitor agent did not start, or not yet.
+    #: ``None`` when it started, and in every other answer.
+    agent_note: str | None = None
 
 
 class MonitorPage(BaseModel):

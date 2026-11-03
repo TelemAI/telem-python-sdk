@@ -331,7 +331,8 @@ class AsyncTelem(BaseClient):
 
     @property
     def monitors(self) -> AsyncMonitorsResource:
-        """Access monitor operations (create, list, get, update, poll, delete)."""
+        """Access monitor operations (create, list, get, update, delete), the agent reads
+        (agent, changes, iter_changes) and the deprecated poll."""
         return self._monitors
 
     @property
