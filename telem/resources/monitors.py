@@ -2,7 +2,13 @@
 
 A monitor has the agent unless it is created with ``agent=False``, and a monitor with the
 agent must end, so its create needs a ``ttl``. Read what the agent finds with ``changes`` or
-``iter_changes``. ``poll`` reads a monitor's own results and is deprecated."""
+``iter_changes``. ``poll`` reads a monitor's own results and is deprecated.
+
+A monitor created with ``inputs`` watches a list of companies: ``onboarding`` reads what
+the first read of each company found and ``apply_onboarding`` applies your review of it,
+``expansions`` lists what the monitor proposes to add (``confirm_expansion``,
+``revert_expansion``), and ``data_map`` says what it collects. ``feedback`` labels a fact
+of any monitor with an agent."""
 
 from __future__ import annotations
 
@@ -19,10 +25,16 @@ from telem._normalize import build_search_response
 from telem.errors import TelemTimeoutError
 from telem.models import (
     AgentDocument,
+    ApplyResult,
     ChangeRecord,
     ChangesPage,
+    DataMap,
+    ExpansionsPage,
+    FeedbackResult,
     Monitor,
+    MonitorInputs,
     MonitorPage,
+    OnboardingSheet,
     SearchResponse,
 )
 
@@ -36,6 +48,20 @@ _NEEDS_TTL = (
     'A monitor with an agent must end: pass ttl, such as ttl="30d" (at most 30 days), '
     "or agent=False for a monitor without an agent."
 )
+#: The same, for a create with ``inputs``. The router refuses ``inputs`` with
+#: ``agent=False`` (400); the SDK does not check that before it sends.
+_NEEDS_TTL_INPUTS = (
+    'A monitor with inputs must end: pass ttl, such as ttl="30d" (at most 365 days).'
+)
+
+
+def _inputs_body(inputs: dict[str, Any] | MonitorInputs) -> dict[str, Any]:
+    """``inputs`` for the wire: a dict as given, or a model's fields that are set. The
+    router checks every value."""
+    if isinstance(inputs, MonitorInputs):
+        dumped = inputs.model_dump(by_alias=True)
+        return {key: value for key, value in dumped.items() if value is not None}
+    return inputs
 
 
 def _create_body(
@@ -47,11 +73,12 @@ def _create_body(
     search: dict[str, Any] | None,
     include_domains: list[str] | None,
     agent: bool | None,
+    inputs: dict[str, Any] | MonitorInputs | None,
 ) -> dict[str, Any]:
     # An explicit ``None`` is the default, as it was before: the agent is on.
     agent_on = True if agent is None else bool(agent)
     if agent_on and not ttl:
-        raise ValueError(_NEEDS_TTL)
+        raise ValueError(_NEEDS_TTL if inputs is None else _NEEDS_TTL_INPUTS)
     options: dict[str, Any] = {}
     if frequency is not None:
         options["frequency"] = frequency
@@ -66,6 +93,8 @@ def _create_body(
         body["webhook_url"] = webhook_url
     if ttl is not None:
         body["ttl"] = ttl
+    if inputs is not None:
+        body["inputs"] = _inputs_body(inputs)
     body["agent"] = agent_on
     return body
 
@@ -209,6 +238,29 @@ def _path(monitor_id: str, suffix: str = "") -> str:
     return f"/v1/monitors/{path_segment(monitor_id)}{suffix}"
 
 
+def _expansion_path(monitor_id: str, expansion_id: str, action: str) -> str:
+    """The path of ``:confirm`` or ``:revert`` of one expansion, its id one encoded segment."""
+    if not expansion_id:
+        raise ValueError("an expansion id is required")
+    return _path(monitor_id, f"/agent/expansions/{path_segment(expansion_id)}:{action}")
+
+
+def _status_params(status: str | None) -> dict[str, Any] | None:
+    return None if status is None else {"status": status}
+
+
+def _set_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    """The fields the caller set: a ``None`` is not sent."""
+    return {key: value for key, value in fields.items() if value is not None}
+
+
+def _feedback_body(fact_id: str, verdict: str, category: str | None) -> dict[str, Any]:
+    body: dict[str, Any] = {"fact_id": fact_id, "verdict": verdict}
+    if category is not None:
+        body["category"] = category
+    return body
+
+
 class MonitorsResource:
     """Synchronous monitor operations bound to a :class:`~telem.client.Telem` client."""
 
@@ -226,6 +278,7 @@ class MonitorsResource:
         search: dict[str, Any] | None = None,
         include_domains: list[str] | None = None,
         agent: bool = True,
+        inputs: dict[str, Any] | MonitorInputs | None = None,
     ) -> Monitor:
         """Create a monitor. Telem runs ``query`` on the schedule, and its agent checks
         every result against ``query`` and keeps the ones that match.
@@ -238,8 +291,8 @@ class MonitorsResource:
                 records the polls of the monitor.
             webhook_url: An ``https`` URL that receives the new results.
             ttl: End the monitor after this long, such as ``"7d"`` or ``"30d"`` (at most
-                ``"30d"``). Required with the agent. Without the agent, the monitor never
-                ends if you leave it out.
+                ``"30d"``, or ``"365d"`` with ``inputs``). Required with the agent. Without
+                the agent, the monitor never ends if you leave it out.
             search: Also run a web search for ``query`` on the schedule, with these
                 search options, named as in :meth:`Telem.search`: ``num_results`` and ``tier``.
                 ``{}`` uses the defaults. It adds to what a poll returns.
@@ -249,6 +302,12 @@ class MonitorsResource:
                 what it keeps with :meth:`iter_changes` or :meth:`changes`. ``False``
                 creates a monitor without an agent, which you read with the deprecated
                 :meth:`poll`.
+            inputs: Watch a list of companies: the companies, and the schema that says
+                what to collect about them, such as the preset ``"biopharma-v0"``. A
+                :class:`~telem.models.MonitorInputs` or a dict, with the router's field
+                names. It needs the agent (the router refuses ``inputs`` with
+                ``agent=False``) and a ``ttl`` of at most ``"365d"``. Read what its first
+                read of each company found with :meth:`onboarding`.
 
         Returns:
             The new :class:`Monitor`. Its ``agent_state`` shows the agent. When the agent
@@ -260,7 +319,7 @@ class MonitorsResource:
             ValueError: The agent is on and ``ttl`` is missing. Nothing was sent.
         """
         body = _create_body(
-            query, frequency, metadata, webhook_url, ttl, search, include_domains, agent
+            query, frequency, metadata, webhook_url, ttl, search, include_domains, agent, inputs
         )
         try:
             data = self._client._post("/v1/monitors", body)
@@ -420,6 +479,142 @@ class MonitorsResource:
                 return
             cursor = page.next_cursor
 
+    def onboarding(self, monitor_id: str) -> OnboardingSheet:
+        """The onboarding sheet of each company of a monitor created with ``inputs``.
+
+        A company's sheet says what the first read of its pages found: candidate kinds of
+        items and of events, each with a count, the number of sites it was found on and an
+        example quote with its page. Labels, names and quotes are text from those pages.
+
+        Args:
+            monitor_id: The monitor id.
+
+        Returns:
+            An :class:`OnboardingSheet`, one company each. A company is ``pending``,
+            ``running`` or ``done``, and has its ``sheet`` once it is ``done``.
+
+        Raises:
+            APIStatusError: ``409`` (``not_an_engine_monitor``): the monitor was created
+                without ``inputs``.
+            NotFoundError: The monitor does not exist, or it is not yours.
+        """
+        return OnboardingSheet.model_validate(
+            self._client._get(_path(monitor_id, "/agent/onboarding"))
+        )
+
+    def apply_onboarding(self, monitor_id: str, marks: dict[str, Any]) -> ApplyResult:
+        """Apply your review of one company's onboarding sheet.
+
+        The accepted candidates join what the monitor collects, and the company's pages are
+        read again for them.
+
+        Args:
+            monitor_id: The monitor id.
+            marks: The review, sent as given: ``company_id`` (required), and any of
+                ``accept`` and ``reject`` (lists of candidate ids), ``rename`` (``{id:
+                label}``) and ``merge`` (``{id: id}``).
+
+        Returns:
+            An :class:`ApplyResult`, with the ``job_id`` of the job that applies it.
+
+        Raises:
+            BadRequestError: ``marks`` names a candidate the sheet does not have.
+            APIStatusError: ``409`` ``onboarding_pending`` (the sheet is not done yet) or
+                ``compile_in_progress`` (the monitor is making its plan: try again soon),
+                ``429`` (too many changes this hour: wait for ``Retry-After``). Nothing
+                changed then.
+        """
+        data = self._client._post(_path(monitor_id, "/agent/onboarding:apply"), dict(marks))
+        return ApplyResult.model_validate(data)
+
+    def expansions(self, monitor_id: str, *, status: str | None = None) -> ExpansionsPage:
+        """What a monitor created with ``inputs`` proposes to add from its own results, or
+        has added: items, people, categories, sources and pages, newest first.
+
+        Args:
+            monitor_id: The monitor id.
+            status: Only the records with this status: ``proposed``, ``active``,
+                ``demoted``, ``retired`` or ``reverted``.
+
+        Returns:
+            An :class:`ExpansionsPage`.
+        """
+        path = _path(monitor_id, "/agent/expansions")
+        return ExpansionsPage.model_validate(self._client._get(path, params=_status_params(status)))
+
+    def confirm_expansion(self, monitor_id: str, expansion_id: str, **fields: Any) -> ApplyResult:
+        """Use a proposed addition: an item becomes active, a category joins the schema.
+
+        Args:
+            monitor_id: The monitor id.
+            expansion_id: The record's ``id``, from :meth:`expansions`.
+            **fields: For an added item, its ``domain`` or ``handle``, if you know them.
+
+        Returns:
+            An :class:`ApplyResult`, with the ``job_id`` of the job that applies it.
+
+        Raises:
+            APIStatusError: ``409`` ``expansion_settled`` (it is reverted or demoted
+                already) or ``compile_in_progress``, ``429``. Nothing changed then.
+        """
+        path = _expansion_path(monitor_id, expansion_id, "confirm")
+        return ApplyResult.model_validate(self._client._post(path, _set_fields(fields)))
+
+    def revert_expansion(self, monitor_id: str, expansion_id: str) -> ApplyResult:
+        """Remove an addition: it is never proposed again, and the facts it brought are
+        taken back.
+
+        Args:
+            monitor_id: The monitor id.
+            expansion_id: The record's ``id``, from :meth:`expansions`.
+
+        Returns:
+            An :class:`ApplyResult`, with the ``job_id`` of the job that applies it.
+
+        Raises:
+            APIStatusError: ``409`` ``expansion_settled`` (it is reverted or demoted
+                already) or ``compile_in_progress``, ``429``. Nothing changed then.
+        """
+        path = _expansion_path(monitor_id, expansion_id, "revert")
+        return ApplyResult.model_validate(self._client._post(path, {}))
+
+    def feedback(
+        self, monitor_id: str, fact_id: str, verdict: str, *, category: str | None = None
+    ) -> FeedbackResult:
+        """Label one fact of the monitor.
+
+        Args:
+            monitor_id: The monitor id.
+            fact_id: The fact's id, as a change names it.
+            verdict: ``confirmed`` (it is right), ``refuted`` (it is wrong) or
+                ``restored`` (a refuted fact counts again).
+            category: With ``refuted``, on a monitor created with ``inputs``: the event
+                category the fact belongs to instead, such as ``other_notable``.
+
+        Returns:
+            A :class:`FeedbackResult`: the fact's status now and, with ``category``, the
+            ``job_id`` of the job that files it there.
+
+        Raises:
+            BadRequestError: ``category`` is not an event category of the monitor
+                (``category_unknown``).
+        """
+        body = _feedback_body(fact_id, verdict, category)
+        data = self._client._post(_path(monitor_id, "/agent/feedback"), body)
+        return FeedbackResult.model_validate(data)
+
+    def data_map(self, monitor_id: str) -> DataMap:
+        """Every kind of item and category of event the monitor collects, the categories it
+        found in its own results, and how it finds people.
+
+        Args:
+            monitor_id: The monitor id.
+
+        Returns:
+            A :class:`DataMap`. Its ``raw`` has everything Telem sent.
+        """
+        return DataMap.model_validate(self._client._get(_path(monitor_id, "/agent/data-map")))
+
     def delete(self, monitor_id: str) -> None:
         """Delete a monitor. A repeat deletes what a failed delete left."""
         self._client._request("DELETE", _path(monitor_id))
@@ -442,11 +637,12 @@ class AsyncMonitorsResource:
         search: dict[str, Any] | None = None,
         include_domains: list[str] | None = None,
         agent: bool = True,
+        inputs: dict[str, Any] | MonitorInputs | None = None,
     ) -> Monitor:
         """Create a monitor. It has the agent unless ``agent=False``, and with the agent
         ``ttl`` is required. See :meth:`MonitorsResource.create`."""
         body = _create_body(
-            query, frequency, metadata, webhook_url, ttl, search, include_domains, agent
+            query, frequency, metadata, webhook_url, ttl, search, include_domains, agent, inputs
         )
         try:
             data = await self._client._post("/v1/monitors", body)
@@ -532,6 +728,48 @@ class AsyncMonitorsResource:
             if not _has_more(page, cursor):
                 return
             cursor = page.next_cursor
+
+    async def onboarding(self, monitor_id: str) -> OnboardingSheet:
+        """The onboarding sheet of each company. See :meth:`MonitorsResource.onboarding`."""
+        data = await self._client._get(_path(monitor_id, "/agent/onboarding"))
+        return OnboardingSheet.model_validate(data)
+
+    async def apply_onboarding(self, monitor_id: str, marks: dict[str, Any]) -> ApplyResult:
+        """Apply your review of one company's sheet. See
+        :meth:`MonitorsResource.apply_onboarding`."""
+        path = _path(monitor_id, "/agent/onboarding:apply")
+        return ApplyResult.model_validate(await self._client._post(path, dict(marks)))
+
+    async def expansions(self, monitor_id: str, *, status: str | None = None) -> ExpansionsPage:
+        """What the monitor proposes to add, or added. See :meth:`MonitorsResource.expansions`."""
+        path = _path(monitor_id, "/agent/expansions")
+        data = await self._client._get(path, params=_status_params(status))
+        return ExpansionsPage.model_validate(data)
+
+    async def confirm_expansion(
+        self, monitor_id: str, expansion_id: str, **fields: Any
+    ) -> ApplyResult:
+        """Use a proposed addition. See :meth:`MonitorsResource.confirm_expansion`."""
+        path = _expansion_path(monitor_id, expansion_id, "confirm")
+        return ApplyResult.model_validate(await self._client._post(path, _set_fields(fields)))
+
+    async def revert_expansion(self, monitor_id: str, expansion_id: str) -> ApplyResult:
+        """Remove an addition. See :meth:`MonitorsResource.revert_expansion`."""
+        path = _expansion_path(monitor_id, expansion_id, "revert")
+        return ApplyResult.model_validate(await self._client._post(path, {}))
+
+    async def feedback(
+        self, monitor_id: str, fact_id: str, verdict: str, *, category: str | None = None
+    ) -> FeedbackResult:
+        """Label one fact of the monitor. See :meth:`MonitorsResource.feedback`."""
+        body = _feedback_body(fact_id, verdict, category)
+        data = await self._client._post(_path(monitor_id, "/agent/feedback"), body)
+        return FeedbackResult.model_validate(data)
+
+    async def data_map(self, monitor_id: str) -> DataMap:
+        """Every kind and category the monitor collects. See :meth:`MonitorsResource.data_map`."""
+        data = await self._client._get(_path(monitor_id, "/agent/data-map"))
+        return DataMap.model_validate(data)
 
     async def delete(self, monitor_id: str) -> None:
         """Delete a monitor. A repeat deletes what a failed delete left."""
