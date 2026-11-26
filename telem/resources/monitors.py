@@ -74,6 +74,7 @@ def _create_body(
     include_domains: list[str] | None,
     agent: bool | None,
     inputs: dict[str, Any] | MonitorInputs | None,
+    preset: str | None = None,
 ) -> dict[str, Any]:
     # An explicit ``None`` is the default, as it was before: the agent is on.
     agent_on = True if agent is None else bool(agent)
@@ -96,6 +97,8 @@ def _create_body(
     if inputs is not None:
         body["inputs"] = _inputs_body(inputs)
     body["agent"] = agent_on
+    if preset is not None:
+        body["preset"] = preset
     return body
 
 
@@ -279,6 +282,7 @@ class MonitorsResource:
         include_domains: list[str] | None = None,
         agent: bool = True,
         inputs: dict[str, Any] | MonitorInputs | None = None,
+        preset: str | None = None,
     ) -> Monitor:
         """Create a monitor. Telem runs ``query`` on the schedule, and its agent checks
         every result against ``query`` and keeps the ones that match.
@@ -308,6 +312,11 @@ class MonitorsResource:
                 names. It needs the agent (the router refuses ``inputs`` with
                 ``agent=False``) and a ``ttl`` of at most ``"365d"``. Read what its first
                 read of each company found with :meth:`onboarding`.
+            preset: The fields every result has: ``"article"`` (``headline``,
+                ``publication``, ``published_at``, ``summary``, ``kind``), ``"person"``,
+                ``"company"`` or ``"listing"``. The agent keeps those fields as they are and
+                may add more. Leave it out and the agent picks the fields from ``query``.
+                It needs the agent and is refused with ``inputs``.
 
         Returns:
             The new :class:`Monitor`. Its ``agent_state`` shows the agent. When the agent
@@ -319,7 +328,16 @@ class MonitorsResource:
             ValueError: The agent is on and ``ttl`` is missing. Nothing was sent.
         """
         body = _create_body(
-            query, frequency, metadata, webhook_url, ttl, search, include_domains, agent, inputs
+            query,
+            frequency,
+            metadata,
+            webhook_url,
+            ttl,
+            search,
+            include_domains,
+            agent,
+            inputs,
+            preset,
         )
         try:
             data = self._client._post("/v1/monitors", body)
@@ -638,11 +656,21 @@ class AsyncMonitorsResource:
         include_domains: list[str] | None = None,
         agent: bool = True,
         inputs: dict[str, Any] | MonitorInputs | None = None,
+        preset: str | None = None,
     ) -> Monitor:
         """Create a monitor. It has the agent unless ``agent=False``, and with the agent
         ``ttl`` is required. See :meth:`MonitorsResource.create`."""
         body = _create_body(
-            query, frequency, metadata, webhook_url, ttl, search, include_domains, agent, inputs
+            query,
+            frequency,
+            metadata,
+            webhook_url,
+            ttl,
+            search,
+            include_domains,
+            agent,
+            inputs,
+            preset,
         )
         try:
             data = await self._client._post("/v1/monitors", body)
