@@ -213,6 +213,12 @@ def _row(provider: str, row: SearchResult) -> str:
     lines = [f"[{provider}] URL: {line(row.url)}"]
     if title := line(row.title):
         lines.append(f"Title: {title}")
+    if image := line(row.image_url):
+        # WSRB #1471: an image search's original image and its size.
+        w, h = row.image_width, row.image_height
+        whole = all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in (w, h))
+        size = f" ({w}x{h})" if whole else ""
+        lines.append(f"Image: {image}{size}")
     if summary := line(row.summary):
         lines.append(f"Summary: {summary}")
 

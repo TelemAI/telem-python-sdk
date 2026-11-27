@@ -50,13 +50,24 @@ from telem import SearchResponse, SearchResult, Telem, TelemError, resolve_searc
 # skill when this directory is copied out of the repository.
 
 
+def _image_line(result: SearchResult) -> str:
+    """WSRB #1471: an image search's original image and its size, on one line."""
+    url = " ".join(result.image_url.split()) if isinstance(result.image_url, str) else ""
+    if not url:
+        return ""
+    w, h = result.image_width, result.image_height
+    whole = all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in (w, h))
+    return f"Image: {url}{f' ({w}x{h})' if whole else ''}\n"
+
+
 def _block(result: SearchResult, max_len: int) -> str:
     """Render one result as a URL/Title/Content block, content truncated to max_len,
     with a Published line between Title and Content when the result has a date."""
     published = (result.publish_date or "").strip()
     date_line = f"Published: {published}\n" if published else ""
     return (
-        f"URL: {result.url}\nTitle: {result.title}\n{date_line}Content: {result.content[:max_len]}"
+        f"URL: {result.url}\nTitle: {result.title}\n{_image_line(result)}{date_line}"
+        f"Content: {result.content[:max_len]}"
     )
 
 
@@ -116,7 +127,9 @@ def main() -> None:
     parser.add_argument("--session", default=None, help="session id from a previous search")
     parser.add_argument("--goal", default=None, help="the current task (first search only)")
     parser.add_argument(
-        "--topic", default=None, help="one site to search: linkedin, reddit or x (twitter)"
+        "--topic",
+        default=None,
+        help="one site to search: linkedin, reddit or x (twitter); or images for an image search",
     )
     parser.add_argument(
         "--providers",

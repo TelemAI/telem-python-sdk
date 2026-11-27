@@ -11,8 +11,10 @@ DEFAULT_RESULT_MAX_LEN = 2048
 #: The model-facing description of the optional per-call ``topic`` tool argument, shared
 #: by every integration that exposes ``telem_search``.
 TOPIC_DESCRIPTION = (
-    "Optional. Set it only when the answer must come from one site: linkedin, reddit, or x "
-    "(twitter is also accepted). Leave it unset otherwise."
+    "Optional. Set it to linkedin, reddit or x (twitter is also accepted) only when the "
+    "answer must come from that site, or to images for an image search: at most 20 results, "
+    "no published_after or published_before, and each result adds the image URL and its size. "
+    "Leave it unset otherwise."
 )
 #: The descriptions of the optional per-call publication window, as ``TOPIC_DESCRIPTION``.
 PUBLISHED_AFTER_DESCRIPTION = (
@@ -51,11 +53,22 @@ def model_search_kwargs(args: Any) -> dict[str, Any]:
     return kwargs
 
 
+def _image_line(result: SearchResult) -> str:
+    """WSRB #1471: an image search's original image and its size, on one line."""
+    url = " ".join(result.image_url.split()) if isinstance(result.image_url, str) else ""
+    if not url:
+        return ""
+    w, h = result.image_width, result.image_height
+    whole = all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in (w, h))
+    return f"Image: {url}{f' ({w}x{h})' if whole else ''}\n"
+
+
 def _block(result: SearchResult, max_len: int) -> str:
     published = (result.publish_date or "").strip()
     date_line = f"Published: {published}\n" if published else ""
     return (
-        f"URL: {result.url}\nTitle: {result.title}\n{date_line}Content: {result.content[:max_len]}"
+        f"URL: {result.url}\nTitle: {result.title}\n{_image_line(result)}{date_line}"
+        f"Content: {result.content[:max_len]}"
     )
 
 

@@ -205,7 +205,7 @@ installed:
 
 ```bash
 python scripts/search.py "query" --goal "..."
-python scripts/search.py "query" --topic reddit   # one site only: linkedin, reddit or x (twitter)
+python scripts/search.py "query" --topic reddit   # one site only: linkedin, reddit or x (twitter); or images (an image search: at most 20 results, no date window)
 # from a checkout, without installing:
 uv run --with /path/to/telem-python-sdk python scripts/search.py "query" --goal "..."
 ```
