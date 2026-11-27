@@ -10,15 +10,55 @@ blocks come from the envelope interior, and result rows land verbatim on
 Four shape malformations degrade instead of raising, so one bad provider cannot cost
 the caller the rest of a healthy response: a non-dict run, a missing or non-dict
 envelope, and a non-list ``results`` each yield an empty run, and a non-dict result
-row is skipped. That is the whole list — anything else (a row whose value has the
-wrong type for its field, say) still surfaces pydantic's ``ValidationError``.
+row is skipped. A row's field whose value has the wrong type (``image_url: 123``, say)
+is left unset on that row only, with a debug log (a fetch row's ``status``, ``error``
+and ``latency_ms`` fall back to the run row's); pydantic's usual coercion still applies
+(``"640"`` reads as 640). Only a wrong-typed ``url`` or ``title``, a search run's own
+provider name, or a fetch run's ``batch_index`` still surfaces pydantic's
+``ValidationError``.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import logging
+from typing import Any, TypeVar
+
+from pydantic import BaseModel, ValidationError
 
 from telem.models import FetchResponse, FetchResult, ProviderRun, SearchResponse, SearchResult
+
+
+logger = logging.getLogger(__name__)
+
+_Model = TypeVar("_Model", bound=BaseModel)
+
+
+def _row(
+    model: type[_Model],
+    data: dict[str, Any],
+    fixed: frozenset[str],
+    fallback: dict[str, Any] | None = None,
+) -> _Model:
+    """``model`` from ``data``. A field that fails validation takes its ``fallback`` value
+    when it has one, else its default, unless it is one of ``fixed``, the fields the caller
+    sets itself; a fallback that fails too is dropped."""
+    fallback = fallback or {}
+    for attempt in range(2):
+        try:
+            return model.model_validate(data)
+        except ValidationError as exc:
+            bad = {str(error["loc"][0]) for error in exc.errors() if error.get("loc")}
+            if not bad or bad & fixed:
+                raise
+            logger.debug("telem: dropped malformed result fields %s", sorted(bad))
+            data = {key: value for key, value in data.items() if key not in bad}
+            if attempt == 0:
+                data |= {key: fallback[key] for key in bad if key in fallback}
+    return model.model_validate(data)
+
+
+_SEARCH_FIXED = frozenset({"url", "title", "provider", "raw"})
+_FETCH_FIXED = frozenset({"url", "title", "batch_index", "raw"})
 
 
 def _results(envelope: dict[str, Any], provider: str) -> list[SearchResult]:
@@ -40,14 +80,16 @@ def _results(envelope: dict[str, Any], provider: str) -> list[SearchResult]:
     if not isinstance(rows, list):
         return []
     return [
-        SearchResult.model_validate(
+        _row(
+            SearchResult,
             {
                 **row,
                 "url": row.get("url") or "",
                 "title": row.get("title") or "",
                 "provider": provider,
                 "raw": row,
-            }
+            },
+            _SEARCH_FIXED,
         )
         for row in rows
         if isinstance(row, dict)
@@ -150,7 +192,8 @@ def _fetch_result(run: dict[str, Any]) -> FetchResult:
     row: dict[str, Any] = {}
     if isinstance(rows, list) and rows and isinstance(rows[0], dict):
         row = rows[0]
-    return FetchResult.model_validate(
+    return _row(
+        FetchResult,
         {
             **row,
             "url": row.get("url") or run.get("query") or "",
@@ -161,7 +204,14 @@ def _fetch_result(run: dict[str, Any]) -> FetchResult:
             "latency_ms": row.get("latency_ms", run.get("latency_ms")),
             "batch_index": run.get("batch_index", 0),
             "raw": row,
-        }
+        },
+        _FETCH_FIXED,
+        # A malformed row value falls back to the run row's, as a missing one does.
+        {
+            "status": run.get("status") or "",
+            "error": run.get("error"),
+            "latency_ms": run.get("latency_ms"),
+        },
     )
 
 
