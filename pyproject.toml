@@ -69,4 +69,5 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
   "e2e: requires a live V2 backend",
+  "live: calls a real backend or MCP server; skipped unless TELEM_LIVE_TESTS=1",
 ]
