@@ -100,10 +100,12 @@ class AsyncTelem(BaseClient):
             raise self._connection_error(path, exc) from exc
         return self._result(response)
 
-    async def _post(self, path: str, json: dict[str, Any]) -> Any:
+    async def _post(
+        self, path: str, json: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> Any:
         """Issue a POST request and return the parsed body (raising typed errors on failure)."""
         try:
-            response = await self._client.post(self._url(path), json=json)
+            response = await self._client.post(self._url(path), json=json, headers=headers)
         except httpx.TimeoutException as exc:
             raise self._timeout_error(path, exc) from exc
         except httpx.TransportError as exc:

@@ -8,6 +8,9 @@ It performs no HTTP itself — each concrete client owns its own httpx client.
 from __future__ import annotations
 
 import os
+import random
+import re
+import uuid
 from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any
@@ -18,7 +21,9 @@ import httpx
 from telem._config_files import TELEM_OPTIONS, option_from_env, read_credentials
 from telem._version import __version__
 from telem.errors import (
+    APIStatusError,
     TelemConnectionError,
+    TelemError,
     TelemServerVersionError,
     TelemTimeoutError,
     raise_for_status,
@@ -37,6 +42,14 @@ _DEFAULT_TIMEOUT = 60.0
 #: The lowest ``normalized_schema_version`` this SDK can parse. The whole
 #: response surface is the V2 envelope, so an older echo is a hard stop, not a fallback.
 _MIN_SCHEMA_VERSION = 2
+#: How long a monitor create keeps retrying, from its first attempt: a burst of 64
+#: creates on a 60/min key drains at about one a second. The count is a backstop.
+_CREATE_RETRY_BUDGET = 120.0
+_CREATE_MAX_RETRIES = 60
+_MAX_BACKOFF_WAIT = 10.0
+_RETRY_BASE_WAIT = 0.5
+_IDEMPOTENCY_KEY = re.compile(r"[\x21-\x7e]{1,255}")
+_RETRY_AFTER_SECONDS = re.compile(r"\s*[0-9]+\s*")
 
 
 def _csv_env(name: str) -> list[str] | None:
@@ -567,7 +580,52 @@ class BaseClient:
             body: object = response.json()
         except ValueError:
             body = response.text
-        return cls._handle_response(response.status_code, body)
+        try:
+            return cls._handle_response(response.status_code, body)
+        except TelemError as exc:
+            exc.retry_after = response.headers.get("retry-after")
+            raise
+
+
+def resolve_idempotency_key(given: str | None) -> str:
+    """The ``Idempotency-Key`` of one create: the caller's, checked, or a fresh uuid4."""
+    if given is None:
+        return str(uuid.uuid4())
+    if not isinstance(given, str) or not _IDEMPOTENCY_KEY.fullmatch(given):
+        raise ValueError("idempotency_key must be 1 to 255 visible ASCII characters")
+    return given
+
+
+def _jittered(wait: float) -> float:
+    """``wait`` plus a random extra of up to 1 s or half the wait, whichever is more,
+    so refused creates do not come back in lockstep."""
+    return wait + random.random() * max(1.0, wait / 2)
+
+
+def create_retry_wait(error: TelemError, attempt: int, elapsed: float) -> float | None:
+    """Seconds to wait before retrying a create sent with an ``Idempotency-Key``, or
+    ``None`` when ``error`` is final or the wait would end past the budget. The key
+    makes a retry after a lost reply return the first monitor, so a timeout or a
+    connection failure is retried too."""
+    if attempt >= _CREATE_MAX_RETRIES:
+        return None
+    if isinstance(error, TelemConnectionError):
+        if isinstance(error.__cause__, (httpx.LocalProtocolError, httpx.UnsupportedProtocol)):
+            return None
+    elif not isinstance(error, APIStatusError):
+        return None
+    elif error.status_code == 409:
+        envelope = error.body.get("error") if isinstance(error.body, dict) else None
+        if not isinstance(envelope, dict) or envelope.get("code") != "idempotency_in_progress":
+            return None
+    elif error.status_code != 429:
+        return None
+    retry_after = error.retry_after
+    if retry_after is not None and _RETRY_AFTER_SECONDS.fullmatch(retry_after):
+        wait = _jittered(float(retry_after))
+    else:
+        wait = min(_jittered(_RETRY_BASE_WAIT * 2**attempt), _MAX_BACKOFF_WAIT)
+    return None if elapsed + wait > _CREATE_RETRY_BUDGET else wait
 
 
 def _iso(value: str | date) -> str:

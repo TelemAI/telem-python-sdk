@@ -185,6 +185,12 @@ returns the agent itself, and `monitor.agent_state` shows it on the monitor; whe
 agent did not start, the create's `monitor.agent_note` says why. With `AsyncTelem`, read
 `iter_changes` with `async for`.
 
+`create` sends an `Idempotency-Key` header, a new one per call unless you pass
+`idempotency_key`. It retries a `429`, a `409` `idempotency_in_progress`, a timeout and a
+lost connection for up to about 2 minutes, with the same key. For 24 hours, a retry
+with the same key returns the first monitor instead of creating a second one. A
+different API key makes a new monitor.
+
 `client.monitors` also has `get` and `list`. `poll` is deprecated and warns once:
 read the agent's changes with `iter_changes` instead.
 See [Monitors](https://docs.telem.ai/resources/monitors/) for the fields, the errors and

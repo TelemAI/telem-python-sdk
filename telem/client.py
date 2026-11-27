@@ -100,10 +100,10 @@ class Telem(BaseClient):
             raise self._connection_error(path, exc) from exc
         return self._result(response)
 
-    def _post(self, path: str, json: dict[str, Any]) -> Any:
+    def _post(self, path: str, json: dict[str, Any], headers: dict[str, str] | None = None) -> Any:
         """Issue a POST request and return the parsed body (raising typed errors on failure)."""
         try:
-            response = self._client.post(self._url(path), json=json)
+            response = self._client.post(self._url(path), json=json, headers=headers)
         except httpx.TimeoutException as exc:
             raise self._timeout_error(path, exc) from exc
         except httpx.TransportError as exc:

@@ -12,6 +12,7 @@ of any monitor with an agent."""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import time
@@ -20,9 +21,9 @@ from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from telem._base import _iso, path_segment
+from telem._base import _iso, create_retry_wait, path_segment, resolve_idempotency_key
 from telem._normalize import build_search_response
-from telem.errors import TelemTimeoutError
+from telem.errors import TelemError, TelemTimeoutError
 from telem.models import (
     AgentDocument,
     ApplyResult,
@@ -241,6 +242,10 @@ def _has_more(page: ChangesPage, cursor: int) -> bool:
 #: Added to a create that timed out: the router may have made the monitor anyway.
 _MAY_EXIST = "The monitor may exist: list monitors before you create it again."
 
+_sleep = time.sleep
+_async_sleep = asyncio.sleep
+_clock = time.monotonic
+
 
 def _page_from(data: Any) -> MonitorPage:
     return MonitorPage.model_validate(data if isinstance(data, dict) else {})
@@ -300,6 +305,7 @@ class MonitorsResource:
         inputs: dict[str, Any] | MonitorInputs | None = None,
         preset: str | None = None,
         tags: list[str] | None = None,
+        idempotency_key: str | None = None,
     ) -> Monitor:
         """Create a monitor. Telem runs ``query`` on the schedule, and its agent checks
         every result against ``query`` and keeps the ones that match.
@@ -338,6 +344,16 @@ class MonitorsResource:
                 most 10. Telem strips and lower-cases each one, which must then be 1 to 32
                 of ``a-z``, ``0-9``, ``-`` and ``_``, starting with a letter or digit, and
                 drops repeats. Anything else is refused with a 422.
+            idempotency_key: The ``Idempotency-Key`` header, 1 to 255 visible ASCII
+                characters. By default each call makes a new one. Pass your own to
+                retry a create across a restart.
+
+        The create is retried on a ``429``, on a ``409`` ``idempotency_in_progress``,
+        and after a timeout or a lost connection, for up to about 120 seconds, waiting
+        for ``Retry-After`` plus a little random extra. Every retry sends the same key,
+        and Telem answers a repeat of the key with the first monitor for 24 hours. A
+        key is scoped to its API key: under another API key the same key is a new
+        create.
 
         Returns:
             The new :class:`Monitor`. Its ``agent_state`` shows the agent. When the agent
@@ -346,7 +362,9 @@ class MonitorsResource:
             only in this response.
 
         Raises:
-            ValueError: The agent is on and ``ttl`` is missing. Nothing was sent.
+            ValueError: The agent is on and ``ttl`` is missing, or ``idempotency_key`` is
+                not valid. Nothing was sent.
+            TelemTimeoutError: The last retry timed out too. The monitor may exist.
         """
         body = _create_body(
             query,
@@ -362,11 +380,20 @@ class MonitorsResource:
             tags=tags,
             default_vertical=self._client.default_vertical,
         )
-        try:
-            data = self._client._post("/v1/monitors", body)
-        except TelemTimeoutError as exc:
-            raise TelemTimeoutError(f"{exc.message}. {_MAY_EXIST}") from exc
-        return Monitor.model_validate(data)
+        headers = {"Idempotency-Key": resolve_idempotency_key(idempotency_key)}
+        attempt, started = 0, _clock()
+        while True:
+            try:
+                data = self._client._post("/v1/monitors", body, headers=headers)
+                return Monitor.model_validate(data)
+            except TelemError as exc:
+                wait = create_retry_wait(exc, attempt, _clock() - started)
+                if wait is None:
+                    if isinstance(exc, TelemTimeoutError):
+                        raise TelemTimeoutError(f"{exc.message}. {_MAY_EXIST}") from exc
+                    raise
+            _sleep(wait)
+            attempt += 1
 
     def list(
         self, *, limit: int | None = None, cursor: str | None = None, tag: str | None = None
@@ -692,9 +719,10 @@ class AsyncMonitorsResource:
         inputs: dict[str, Any] | MonitorInputs | None = None,
         preset: str | None = None,
         tags: list[str] | None = None,
+        idempotency_key: str | None = None,
     ) -> Monitor:
         """Create a monitor. It has the agent unless ``agent=False``, and with the agent
-        ``ttl`` is required. See :meth:`MonitorsResource.create`."""
+        ``ttl`` is required. Retried as :meth:`MonitorsResource.create` is."""
         body = _create_body(
             query,
             frequency,
@@ -709,11 +737,20 @@ class AsyncMonitorsResource:
             tags=tags,
             default_vertical=self._client.default_vertical,
         )
-        try:
-            data = await self._client._post("/v1/monitors", body)
-        except TelemTimeoutError as exc:
-            raise TelemTimeoutError(f"{exc.message}. {_MAY_EXIST}") from exc
-        return Monitor.model_validate(data)
+        headers = {"Idempotency-Key": resolve_idempotency_key(idempotency_key)}
+        attempt, started = 0, _clock()
+        while True:
+            try:
+                data = await self._client._post("/v1/monitors", body, headers=headers)
+                return Monitor.model_validate(data)
+            except TelemError as exc:
+                wait = create_retry_wait(exc, attempt, _clock() - started)
+                if wait is None:
+                    if isinstance(exc, TelemTimeoutError):
+                        raise TelemTimeoutError(f"{exc.message}. {_MAY_EXIST}") from exc
+                    raise
+            await _async_sleep(wait)
+            attempt += 1
 
     async def list(
         self, *, limit: int | None = None, cursor: str | None = None, tag: str | None = None

@@ -10,7 +10,10 @@ class TelemError(Exception):
         message: Human-readable error message.
         status_code: The HTTP status code that triggered the error, if any.
         body: The parsed response body (dict) or raw text that triggered the error, if any.
+        retry_after: The response's ``Retry-After`` header, if it sent one.
     """
+
+    retry_after: str | None = None
 
     def __init__(
         self,
