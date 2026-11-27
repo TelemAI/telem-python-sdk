@@ -75,6 +75,7 @@ def _create_body(
     agent: bool | None,
     inputs: dict[str, Any] | MonitorInputs | None,
     preset: str | None = None,
+    tags: list[str] | None = None,
 ) -> dict[str, Any]:
     # An explicit ``None`` is the default, as it was before: the agent is on.
     agent_on = True if agent is None else bool(agent)
@@ -99,6 +100,8 @@ def _create_body(
     body["agent"] = agent_on
     if preset is not None:
         body["preset"] = preset
+    if tags is not None:
+        body["tags"] = tags
     return body
 
 
@@ -120,11 +123,14 @@ def _update_body(
     frequency: str | None,
     webhook_url: str | None,
     ttl: str | None,
+    tags: list[str] | None = None,
 ) -> dict[str, Any]:
     body = {"status": status, "frequency": frequency, "ttl": ttl}
     body = {key: value for key, value in body.items() if value is not None}
     if webhook_url is not None:
         body["webhook_url"] = webhook_url or None  # "" removes the webhook
+    if tags is not None:
+        body["tags"] = tags  # [] clears them; the router refuses null
     return body
 
 
@@ -182,12 +188,16 @@ def _poll_body(session: str | None, metadata: dict[str, Any] | None) -> dict[str
     return body
 
 
-def _list_params(limit: int | None, cursor: str | None) -> dict[str, Any] | None:
+def _list_params(
+    limit: int | None, cursor: str | None, tag: str | None = None
+) -> dict[str, Any] | None:
     params: dict[str, Any] = {}
     if limit is not None:
         params["limit"] = limit
     if cursor is not None:
         params["cursor"] = cursor
+    if tag is not None:
+        params["tag"] = tag
     return params or None
 
 
@@ -283,6 +293,7 @@ class MonitorsResource:
         agent: bool = True,
         inputs: dict[str, Any] | MonitorInputs | None = None,
         preset: str | None = None,
+        tags: list[str] | None = None,
     ) -> Monitor:
         """Create a monitor. Telem runs ``query`` on the schedule, and its agent checks
         every result against ``query`` and keeps the ones that match.
@@ -317,6 +328,10 @@ class MonitorsResource:
                 ``"company"`` or ``"listing"``. The agent keeps those fields as they are and
                 may add more. Leave it out and the agent picks the fields from ``query``.
                 It needs the agent and is refused with ``inputs``.
+            tags: Labels of your own, to list the monitor by with ``list(tag=...)``: at
+                most 10. Telem strips and lower-cases each one, which must then be 1 to 32
+                of ``a-z``, ``0-9``, ``-`` and ``_``, starting with a letter or digit, and
+                drops repeats. Anything else is refused with a 422.
 
         Returns:
             The new :class:`Monitor`. Its ``agent_state`` shows the agent. When the agent
@@ -338,6 +353,7 @@ class MonitorsResource:
             agent,
             inputs,
             preset,
+            tags,
         )
         try:
             data = self._client._post("/v1/monitors", body)
@@ -345,23 +361,31 @@ class MonitorsResource:
             raise TelemTimeoutError(f"{exc.message}. {_MAY_EXIST}") from exc
         return Monitor.model_validate(data)
 
-    def list(self, *, limit: int | None = None, cursor: str | None = None) -> list[Monitor]:
+    def list(
+        self, *, limit: int | None = None, cursor: str | None = None, tag: str | None = None
+    ) -> list[Monitor]:
         """List your monitors, newest first. :meth:`list_page` also gives the next cursor.
 
         Args:
             limit: How many to return (server default 50, maximum 200).
             cursor: The ``next_cursor`` of the page before.
+            tag: Only your key's monitors that carry this one tag.
         """
-        return self.list_page(limit=limit, cursor=cursor).monitors
+        return self.list_page(limit=limit, cursor=cursor, tag=tag).monitors
 
-    def list_page(self, *, limit: int | None = None, cursor: str | None = None) -> MonitorPage:
+    def list_page(
+        self, *, limit: int | None = None, cursor: str | None = None, tag: str | None = None
+    ) -> MonitorPage:
         """One page of your monitors, newest first, and the cursor of the next page.
 
         Args:
             limit: How many to return (server default 50, maximum 200).
             cursor: The ``next_cursor`` of the page before.
+            tag: Only your key's monitors that carry this one tag. Page on with
+                ``cursor`` and the same ``tag``.
         """
-        return _page_from(self._client._get("/v1/monitors", params=_list_params(limit, cursor)))
+        params = _list_params(limit, cursor, tag)
+        return _page_from(self._client._get("/v1/monitors", params=params))
 
     def get(self, monitor_id: str) -> Monitor:
         """Get one monitor."""
@@ -375,6 +399,7 @@ class MonitorsResource:
         frequency: str | None = None,
         webhook_url: str | None = None,
         ttl: str | None = None,
+        tags: list[str] | None = None,
     ) -> Monitor:
         """Pause, resume, renew or change a monitor. Send at least one field.
 
@@ -386,11 +411,13 @@ class MonitorsResource:
                 response. ``""`` removes the webhook.
             ttl: A new end, this long from now, such as ``"30d"`` (at most ``"30d"``).
                 It renews a monitor before it ends; an ended monitor cannot be renewed.
+            tags: The monitor's new tags, in place of all its tags (the rule is that of
+                :meth:`create`). ``[]`` removes them all; leave it out to keep them.
 
         Returns:
             The updated :class:`Monitor`.
         """
-        body = _update_body(status, frequency, webhook_url, ttl)
+        body = _update_body(status, frequency, webhook_url, ttl, tags)
         return Monitor.model_validate(self._client._request("PATCH", _path(monitor_id), body))
 
     def poll(
@@ -657,6 +684,7 @@ class AsyncMonitorsResource:
         agent: bool = True,
         inputs: dict[str, Any] | MonitorInputs | None = None,
         preset: str | None = None,
+        tags: list[str] | None = None,
     ) -> Monitor:
         """Create a monitor. It has the agent unless ``agent=False``, and with the agent
         ``ttl`` is required. See :meth:`MonitorsResource.create`."""
@@ -671,6 +699,7 @@ class AsyncMonitorsResource:
             agent,
             inputs,
             preset,
+            tags,
         )
         try:
             data = await self._client._post("/v1/monitors", body)
@@ -678,15 +707,18 @@ class AsyncMonitorsResource:
             raise TelemTimeoutError(f"{exc.message}. {_MAY_EXIST}") from exc
         return Monitor.model_validate(data)
 
-    async def list(self, *, limit: int | None = None, cursor: str | None = None) -> list[Monitor]:
+    async def list(
+        self, *, limit: int | None = None, cursor: str | None = None, tag: str | None = None
+    ) -> list[Monitor]:
         """List your monitors, newest first. See :meth:`MonitorsResource.list`."""
-        return (await self.list_page(limit=limit, cursor=cursor)).monitors
+        return (await self.list_page(limit=limit, cursor=cursor, tag=tag)).monitors
 
     async def list_page(
-        self, *, limit: int | None = None, cursor: str | None = None
+        self, *, limit: int | None = None, cursor: str | None = None, tag: str | None = None
     ) -> MonitorPage:
         """One page of your monitors. See :meth:`MonitorsResource.list_page`."""
-        data = await self._client._get("/v1/monitors", params=_list_params(limit, cursor))
+        params = _list_params(limit, cursor, tag)
+        data = await self._client._get("/v1/monitors", params=params)
         return _page_from(data)
 
     async def get(self, monitor_id: str) -> Monitor:
@@ -701,9 +733,10 @@ class AsyncMonitorsResource:
         frequency: str | None = None,
         webhook_url: str | None = None,
         ttl: str | None = None,
+        tags: list[str] | None = None,
     ) -> Monitor:
         """Pause, resume, renew or change a monitor. See :meth:`MonitorsResource.update`."""
-        body = _update_body(status, frequency, webhook_url, ttl)
+        body = _update_body(status, frequency, webhook_url, ttl, tags)
         data = await self._client._request("PATCH", _path(monitor_id), body)
         return Monitor.model_validate(data)
 

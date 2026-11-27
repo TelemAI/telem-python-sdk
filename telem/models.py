@@ -233,6 +233,8 @@ class Monitor(BaseModel):
     #: Only in the answer to a create: why the monitor agent did not start, or not yet.
     #: ``None`` when it started, and in every other answer.
     agent_note: str | None = None
+    #: Your labels for the monitor; empty when it has none.
+    tags: list[str] = Field(default_factory=list)
 
 
 class MonitorPage(BaseModel):
