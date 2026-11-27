@@ -323,6 +323,29 @@ class ChangesPage(BaseModel):
     watermark: int
 
 
+class MonitorsChangesPage(BaseModel):
+    """One page of :meth:`~telem.resources.monitors.MonitorsResource.changes_across`.
+
+    Ordered by ``seq``, but a monitor that joins later or catches up can bring lower seqs
+    on a later page: dedupe by ``seq``.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    changes: list[ChangeRecord] = Field(default_factory=list)
+    #: Keep it, and pass it as ``cursor`` to read on. It is opaque, and holds the place of
+    #: every monitor of the read, the ``pending`` ones too.
+    next_cursor: str
+    #: ``True`` only for a full page: read on now with ``next_cursor``.
+    more: bool = False
+    #: The monitors read for this page.
+    monitors: list[str] = Field(default_factory=list)
+    #: The monitors not read on this call. A later call with ``next_cursor`` reads them.
+    pending: list[str] = Field(default_factory=list)
+    #: The monitors of the tag that have no agent.
+    skipped: list[str] = Field(default_factory=list)
+
+
 # --------------------------------------------------------------------------- #
 # A monitor created with ``inputs``: a list of companies, and a schema that says what to
 # collect about them.

@@ -36,6 +36,7 @@ from telem.models import (
     Monitor,
     MonitorInputs,
     MonitorPage,
+    MonitorsChangesPage,
     OnboardingCandidate,
     OnboardingCompany,
     OnboardingExample,
@@ -72,6 +73,7 @@ __all__ = [
     "ChangesPage",
     "ChangeRecord",
     "ChangeSubject",
+    "MonitorsChangesPage",
     # A monitor created with inputs: what it collects, its onboarding and its expansions.
     "MonitorInputs",
     "OnboardingSheet",

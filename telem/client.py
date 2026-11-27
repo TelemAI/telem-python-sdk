@@ -343,9 +343,9 @@ class Telem(BaseClient):
     @property
     def monitors(self) -> MonitorsResource:
         """Access monitor operations (create, list, get, update, delete), the agent reads
-        (agent, changes, iter_changes), feedback, what a monitor created with inputs
-        collects (onboarding, apply_onboarding, expansions, confirm_expansion,
-        revert_expansion, data_map) and the deprecated poll."""
+        (agent, changes, iter_changes, changes_across, iter_changes_across), feedback, what
+        a monitor created with inputs collects (onboarding, apply_onboarding, expansions,
+        confirm_expansion, revert_expansion, data_map) and the deprecated poll."""
         return self._monitors
 
     @property

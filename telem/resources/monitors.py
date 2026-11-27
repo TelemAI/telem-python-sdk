@@ -2,7 +2,8 @@
 
 A monitor has the agent unless it is created with ``agent=False``, and a monitor with the
 agent must end, so its create needs a ``ttl``. Read what the agent finds with ``changes`` or
-``iter_changes``. ``poll`` reads a monitor's own results and is deprecated.
+``iter_changes``, and the changes of many monitors in one read with ``changes_across`` or
+``iter_changes_across``. ``poll`` reads a monitor's own results and is deprecated.
 
 A monitor created with ``inputs`` watches a list of companies: ``onboarding`` reads what
 the first read of each company found and ``apply_onboarding`` applies your review of it,
@@ -35,6 +36,7 @@ from telem.models import (
     Monitor,
     MonitorInputs,
     MonitorPage,
+    MonitorsChangesPage,
     OnboardingSheet,
     SearchResponse,
 )
@@ -237,6 +239,36 @@ def _has_more(page: ChangesPage, cursor: int) -> bool:
     says: the router sends neither below the watermark, and reading on could bring the
     same page back for ever."""
     return bool(page.changes) and cursor < page.next_cursor < page.watermark
+
+
+def _across_params(
+    tag: str | None,
+    ids: str | list[str] | None,
+    cursor: str | None,
+    since: str | datetime | None,
+    kinds: list[str] | None,
+    limit: int | None,
+) -> dict[str, Any]:
+    """The query of a read across monitors: ``tag`` or ``ids``, then what the caller set."""
+    if (tag is None) == (ids is None):
+        raise ValueError("send tag or ids, one of them")
+    if tag is not None:
+        params: dict[str, Any] = {"tag": tag}
+    else:
+        if not ids:
+            raise ValueError("ids needs at least one monitor id")
+        # One id written as a bare string is one id, not one per letter.
+        params = {"ids": ids if isinstance(ids, str) else ",".join(ids)}
+    if cursor is not None:
+        params["cursor"] = cursor
+    params.update(_changes_params(None, since, kinds, limit) or {})
+    return params
+
+
+def _reads_across_on(page: MonitorsChangesPage, cursor: str | None) -> bool:
+    """Whether to read on from ``page.next_cursor``: only after a full page (``more``) that
+    served changes and moved the cursor, so a stalled router cannot repeat a page for ever."""
+    return page.more and bool(page.changes) and page.next_cursor != cursor
 
 
 #: Added to a create that timed out: the router may have made the monitor anyway.
@@ -558,6 +590,81 @@ class MonitorsResource:
                 return
             cursor = page.next_cursor
 
+    def changes_across(
+        self,
+        tag: str | None = None,
+        ids: str | list[str] | None = None,
+        *,
+        cursor: str | None = None,
+        since: str | datetime | None = None,
+        kinds: list[str] | None = None,
+        limit: int | None = None,
+    ) -> MonitorsChangesPage:
+        """One page of the changes of up to 100 monitors, by ``seq``.
+
+        Send ``tag`` or ``ids``, one of them. Keep the ``next_cursor`` of every page, the
+        last one too, and pass it as ``cursor`` with the same ``tag`` or ``ids`` to read
+        on. Read on now while ``more`` is true; ``pending`` monitors are read by a later
+        call with the cursor. A later page can bring lower seqs: dedupe by ``seq``.
+
+        Args:
+            tag: Your key's own live monitors that carry this tag. A monitor with no agent
+                is in ``skipped``.
+            ids: These monitors, at most 100: any monitor with an agent in your key's
+                project, ended ones too. One that is not is a 404 for the whole read.
+            cursor: The ``next_cursor`` of the page before. Without it, the read starts at
+                the first change.
+            since: Start at a time instead of a cursor, and not together with one. A
+                monitor that joins later starts at the same time. As in :meth:`changes`.
+            kinds: Only these kinds, as in :meth:`changes`.
+            limit: How many changes to return at most (server default 200, maximum 500).
+
+        Returns:
+            A :class:`MonitorsChangesPage`.
+
+        Raises:
+            ValueError: Neither or both of ``tag`` and ``ids``, or an empty ``ids``.
+                Nothing is sent.
+            BadRequestError: ``invalid_request``, ``cursor_conflict`` (``cursor`` and
+                ``since``), ``cursor_invalid`` or ``kinds_invalid``.
+            NotFoundError: A monitor of ``ids`` has no agent, or is not in your project.
+            APIStatusError: A ``422``: ``too_many_monitors`` (more than 100; read them in
+                groups of ``ids``), or a parameter is malformed.
+        """
+        params = _across_params(tag, ids, cursor, since, kinds, limit)
+        return MonitorsChangesPage.model_validate(
+            self._client._get("/v1/monitors/changes", params=params)
+        )
+
+    def iter_changes_across(
+        self,
+        tag: str | None = None,
+        ids: str | list[str] | None = None,
+        *,
+        cursor: str | None = None,
+        since: str | datetime | None = None,
+        kinds: list[str] | None = None,
+        limit: int | None = None,
+    ) -> Iterator[ChangeRecord]:
+        """The changes of up to 100 monitors, page by page while ``more`` is true.
+
+        It reads what is there now in one pass and then stops. It cannot hand back the
+        cursor: to keep your place between reads, call :meth:`changes_across` page by
+        page and keep each ``next_cursor``. Dedupe by ``seq``. The arguments are those of
+        :meth:`changes_across`; ``since`` is sent with the first page only.
+
+        Yields:
+            :class:`ChangeRecord`, as the router serves them.
+        """
+        while True:
+            page = self.changes_across(
+                tag, ids, cursor=cursor, since=since, kinds=kinds, limit=limit
+            )
+            yield from page.changes
+            if not _reads_across_on(page, cursor):
+                return
+            cursor, since = page.next_cursor, None
+
     def onboarding(self, monitor_id: str) -> OnboardingSheet:
         """The onboarding sheet of each company of a monitor created with ``inputs``.
 
@@ -834,6 +941,47 @@ class AsyncMonitorsResource:
             if not _has_more(page, cursor):
                 return
             cursor = page.next_cursor
+
+    async def changes_across(
+        self,
+        tag: str | None = None,
+        ids: str | list[str] | None = None,
+        *,
+        cursor: str | None = None,
+        since: str | datetime | None = None,
+        kinds: list[str] | None = None,
+        limit: int | None = None,
+    ) -> MonitorsChangesPage:
+        """One page of the changes of up to 100 monitors. See
+        :meth:`MonitorsResource.changes_across`."""
+        params = _across_params(tag, ids, cursor, since, kinds, limit)
+        return MonitorsChangesPage.model_validate(
+            await self._client._get("/v1/monitors/changes", params=params)
+        )
+
+    async def iter_changes_across(
+        self,
+        tag: str | None = None,
+        ids: str | list[str] | None = None,
+        *,
+        cursor: str | None = None,
+        since: str | datetime | None = None,
+        kinds: list[str] | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[ChangeRecord]:
+        """The changes of up to 100 monitors, while ``more`` is true.
+
+        Use it with ``async for``. See :meth:`MonitorsResource.iter_changes_across`.
+        """
+        while True:
+            page = await self.changes_across(
+                tag, ids, cursor=cursor, since=since, kinds=kinds, limit=limit
+            )
+            for change in page.changes:
+                yield change
+            if not _reads_across_on(page, cursor):
+                return
+            cursor, since = page.next_cursor, None
 
     async def onboarding(self, monitor_id: str) -> OnboardingSheet:
         """The onboarding sheet of each company. See :meth:`MonitorsResource.onboarding`."""
