@@ -39,6 +39,12 @@ class Telem(BaseClient):
         default_auto_routing: str | None = None,
         default_max_routing_providers: int | None = None,
         default_topic: str | None = None,
+        # Unpublished: the search vertical (``search.vertical`` on searches,
+        # ``inputs.vertical`` on monitor creates with ``inputs``). ``vertical`` is an alias
+        # of ``default_vertical``; falls back to ``TELEM_VERTICAL``. Not documented until
+        # the router accepts the field. See BaseClient.
+        default_vertical: str | None = None,
+        vertical: str | None = None,
     ) -> None:
         """Create a synchronous Telem client.
 
@@ -77,6 +83,8 @@ class Telem(BaseClient):
             default_auto_routing=default_auto_routing,
             default_max_routing_providers=default_max_routing_providers,
             default_topic=default_topic,
+            default_vertical=default_vertical,
+            vertical=vertical,
         )
         self._client = httpx.Client(timeout=timeout, headers=self._headers())
         self._sessions = SessionsResource(self)
@@ -130,6 +138,8 @@ class Telem(BaseClient):
         published_after: str | date | None = None,
         published_before: str | date | None = None,
         include_domains: list[str] | None = None,
+        # Unpublished per-call vertical: wins over the client default. See BaseClient.
+        vertical: str | None = None,
         goal: str | None = None,
         context: str | None = None,
         session: str | None = None,
@@ -192,6 +202,7 @@ class Telem(BaseClient):
             published_after=published_after,
             published_before=published_before,
             include_domains=include_domains,
+            vertical=vertical,
             goal=goal,
             context=context,
             session=session,

@@ -74,8 +74,10 @@ def _create_body(
     include_domains: list[str] | None,
     agent: bool | None,
     inputs: dict[str, Any] | MonitorInputs | None,
+    *,
     preset: str | None = None,
     tags: list[str] | None = None,
+    default_vertical: str | None = None,
 ) -> dict[str, Any]:
     # An explicit ``None`` is the default, as it was before: the agent is on.
     agent_on = True if agent is None else bool(agent)
@@ -97,6 +99,10 @@ def _create_body(
         body["ttl"] = ttl
     if inputs is not None:
         body["inputs"] = _inputs_body(inputs)
+        # Unpublished: the client's default vertical, on inputs that do not set one.
+        # A copy, so the caller's dict is never changed. Unset adds nothing.
+        if default_vertical is not None and "vertical" not in body["inputs"]:
+            body["inputs"] = {**body["inputs"], "vertical": default_vertical}
     body["agent"] = agent_on
     if preset is not None:
         body["preset"] = preset
@@ -352,8 +358,9 @@ class MonitorsResource:
             include_domains,
             agent,
             inputs,
-            preset,
-            tags,
+            preset=preset,
+            tags=tags,
+            default_vertical=self._client.default_vertical,
         )
         try:
             data = self._client._post("/v1/monitors", body)
@@ -698,8 +705,9 @@ class AsyncMonitorsResource:
             include_domains,
             agent,
             inputs,
-            preset,
-            tags,
+            preset=preset,
+            tags=tags,
+            default_vertical=self._client.default_vertical,
         )
         try:
             data = await self._client._post("/v1/monitors", body)

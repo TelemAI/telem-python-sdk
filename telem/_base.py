@@ -114,6 +114,8 @@ class BaseClient:
         default_auto_routing: str | None = None,
         default_max_routing_providers: int | None = None,
         default_topic: str | None = None,
+        default_vertical: str | None = None,
+        vertical: str | None = None,
     ) -> None:
         # Credentials: argument, else env var, else ``~/.telem/credentials.json`` — the
         # file the wizard/`--login` writes, so an installed user never has to export
@@ -176,6 +178,27 @@ class BaseClient:
             if default_topic is not None
             else ((os.environ.get("TELEM_TOPIC") or "").strip() or None)
         )
+        # UNPUBLISHED (2026-11-27): the search vertical ("health", "general"; the router
+        # validates the name and 400s an unknown one). Set, it becomes ``search.vertical``
+        # on a search that does not set one, and ``inputs.vertical`` on a monitor create
+        # with ``inputs`` that does not set one. Unset (the default), nothing is sent and
+        # every body is byte-identical to before. ``vertical`` is an alias of
+        # ``default_vertical``; ``TELEM_VERTICAL`` is the fallback. Deliberately NOT a
+        # config-file key, a tool argument, or documented: a router that predates the
+        # field rejects a request carrying it. ``TELEM_VERTICAL`` makes EVERY search and
+        # monitor create of the process send it, so it must not be set in any environment
+        # until the router that accepts ``vertical`` is live.
+        if default_vertical is not None and vertical is not None and default_vertical != vertical:
+            raise ValueError(
+                f"vertical={vertical!r} and default_vertical={default_vertical!r} are the "
+                "same option; pass one of them"
+            )
+        given_vertical = default_vertical if default_vertical is not None else vertical
+        self.default_vertical = (
+            given_vertical
+            if given_vertical is not None
+            else ((os.environ.get("TELEM_VERTICAL") or "").strip() or None)
+        )
         # Fetch defaults: env var only, else unset; a ``fetch()`` argument wins per key.
         # The tier is lowercased, as the agent plugins send it. The config files stay
         # unread here too: ``resolve_fetch_options()`` is the opt-in for them.
@@ -215,6 +238,7 @@ class BaseClient:
         published_after: str | date | None = None,
         published_before: str | date | None = None,
         include_domains: list[str] | None = None,
+        vertical: str | None = None,
     ) -> dict[str, Any]:
         """Resolve call arguments against the client defaults into the wire ``search`` block.
 
@@ -308,6 +332,11 @@ class BaseClient:
             block["published_before"] = _iso(published_before)
         if include_domains is not None:
             block["include_domains"] = include_domains
+        # Unpublished; see ``__init__``. A call value wins over the client default.
+        if vertical is None:
+            vertical = self.default_vertical
+        if vertical is not None:
+            block["vertical"] = vertical
         return block
 
     def _search_body(
@@ -328,6 +357,7 @@ class BaseClient:
         published_after: str | date | None = None,
         published_before: str | date | None = None,
         include_domains: list[str] | None = None,
+        vertical: str | None = None,
         goal: str | None = None,
         context: str | None = None,
         session: str | None = None,
@@ -392,6 +422,7 @@ class BaseClient:
             published_after=published_after,
             published_before=published_before,
             include_domains=include_domains,
+            vertical=vertical,
         )
         if search:
             body["search"] = search
