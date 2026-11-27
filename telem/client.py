@@ -168,7 +168,8 @@ class Telem(BaseClient):
             include_full_content: Ask providers for full page content.
             auto_routing: Routing mode: ``"accuracy"``, ``"latency"`` or ``"search_cost"``.
             max_routing_providers: How many providers a routed query uses.
-            topic: Topic name for the query.
+            topic: Topic name for the query. ``"images"`` is an image search on brave
+                only: each result adds ``image_url``, ``image_width`` and ``image_height``.
             published_after: Only return results published on or after this date or
                 date-time (an ISO 8601 string, or a ``date``/``datetime``). A string
                 with no time zone is UTC; a naive ``datetime`` is local time. Results

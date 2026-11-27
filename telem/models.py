@@ -24,6 +24,10 @@ class SearchResult(BaseModel):
     source: dict[str, Any] | None = None
     enrichments: dict[str, Any] | None = None
     fetch_meta: dict[str, Any] | None = None
+    # Image searches (``topic="images"``) only: the original image, its width and height.
+    image_url: str | None = None
+    image_width: int | None = None
+    image_height: int | None = None
     provider: str = ""
     raw: dict[str, Any] = Field(default_factory=dict)
 
