@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import re
 import time
 import warnings
 from collections.abc import AsyncIterator, Iterator
@@ -144,6 +145,9 @@ def _update_body(
     return body
 
 
+_SIGNATURE = re.compile(r"[0-9a-f]{64}")
+
+
 def verify_webhook(body: bytes | str, header: str, secret: str, *, tolerance: int = 300) -> bool:
     """Check a monitor webhook: the ``Telem-Signature`` header against the raw body.
 
@@ -154,15 +158,24 @@ def verify_webhook(body: bytes | str, header: str, secret: str, *, tolerance: in
         tolerance: The oldest signature to accept, in seconds.
 
     Returns:
-        True when the signature is correct and not older than ``tolerance``.
+        True when any ``v1`` signature is correct and not older than ``tolerance``.
+        A header can carry several: during a secret's rotation, one for each secret.
+        A header with no ``t``, or more than one, is False.
     """
-    parts = dict(item.split("=", 1) for item in header.split(",") if "=" in item)
-    timestamp, signature = parts.get("t", ""), parts.get("v1", "")
-    if not timestamp.isdigit() or abs(time.time() - int(timestamp)) > tolerance:
+    parts = [item.strip().split("=", 1) for item in header.split(",") if "=" in item]
+    timestamps = [value for key, value in parts if key == "t"]
+    signatures = [value for key, value in parts if key == "v1" and _SIGNATURE.fullmatch(value)]
+    if len(timestamps) != 1 or not signatures:
+        return False
+    timestamp = timestamps[0]
+    if (
+        not (timestamp.isascii() and timestamp.isdigit())
+        or abs(time.time() - int(timestamp)) > tolerance
+    ):
         return False
     raw = body.encode() if isinstance(body, str) else body
-    expected = hmac.new(secret.encode(), f"{timestamp}.".encode() + raw, hashlib.sha256)
-    return hmac.compare_digest(expected.hexdigest(), signature)
+    expected = hmac.new(secret.encode(), f"{timestamp}.".encode() + raw, hashlib.sha256).hexdigest()
+    return any(hmac.compare_digest(expected, signature) for signature in signatures)
 
 
 #: Whether this process has been told that ``poll`` is deprecated: it is told once.
