@@ -522,6 +522,44 @@ class ExpansionsPage(_KeepsRaw):
     next_cursor: str | None = None
 
 
+class CompanyListRow(_KeepsRaw):
+    """One company of :class:`CompanyList`."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    company_id: str
+    name: str = ""
+    domain: str = ""
+    #: Whether the company is marked priority: it is checked on every routine run.
+    priority: bool = False
+    aliases: list[str] = Field(default_factory=list)
+    ticker: str = ""
+    x_handle: str = ""
+    newsroom_url: str = ""
+    team_page: str = ""
+    #: ``daily``, ``weekly`` or ``off``, as you gave it; empty when its rank decides.
+    tier: str = ""
+    #: Its place among the monitor's companies, from 1.
+    rank: int = 0
+
+
+class CompanyList(_KeepsRaw):
+    """One page of :meth:`~telem.resources.monitors.MonitorsResource.companies`, in rank
+    order."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    #: All the companies the monitor follows.
+    total: int = 0
+    #: How many of them are marked priority.
+    priority_count: int = 0
+    offset: int = 0
+    limit: int = 0
+    #: Pass it as ``offset`` for the next page; ``None`` on the last page.
+    next_offset: int | None = None
+    companies: list[CompanyListRow] = Field(default_factory=list)
+
+
 class FeedbackResult(_KeepsRaw):
     """The labelled fact's status now: :meth:`~telem.resources.monitors.MonitorsResource.feedback`."""
 

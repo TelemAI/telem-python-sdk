@@ -347,7 +347,7 @@ class AsyncTelem(BaseClient):
         """Access monitor operations (create, list, get, update, delete), the agent reads
         (agent, changes, iter_changes, changes_across, iter_changes_across), feedback, what
         a monitor created with inputs collects (onboarding, apply_onboarding, expansions,
-        confirm_expansion, revert_expansion, data_map) and the deprecated poll."""
+        confirm_expansion, revert_expansion, data_map, companies) and the deprecated poll."""
         return self._monitors
 
     @property

@@ -8,8 +8,8 @@ agent must end, so its create needs a ``ttl``. Read what the agent finds with ``
 A monitor created with ``inputs`` watches a list of companies: ``onboarding`` reads what
 the first read of each company found and ``apply_onboarding`` applies your review of it,
 ``expansions`` lists what the monitor proposes to add (``confirm_expansion``,
-``revert_expansion``), and ``data_map`` says what it collects. ``feedback`` labels a fact
-of any monitor with an agent."""
+``revert_expansion``), ``data_map`` says what it collects, and ``companies`` lists its
+companies. ``feedback`` labels a fact of any monitor with an agent."""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ from telem.models import (
     ApplyResult,
     ChangeRecord,
     ChangesPage,
+    CompanyList,
     DataMap,
     ExpansionsPage,
     FeedbackResult,
@@ -303,6 +304,11 @@ def _expansion_path(monitor_id: str, expansion_id: str, action: str) -> str:
 
 def _status_params(status: str | None) -> dict[str, Any] | None:
     return None if status is None else {"status": status}
+
+
+def _page_params(offset: int | None, limit: int | None) -> dict[str, Any] | None:
+    params = _set_fields({"offset": offset, "limit": limit})
+    return params or None
 
 
 def _set_fields(fields: dict[str, Any]) -> dict[str, Any]:
@@ -801,6 +807,32 @@ class MonitorsResource:
         """
         return DataMap.model_validate(self._client._get(_path(monitor_id, "/agent/data-map")))
 
+    def companies(
+        self, monitor_id: str, *, offset: int | None = None, limit: int | None = None
+    ) -> CompanyList:
+        """One page of the companies a monitor created with ``inputs`` follows, in rank
+        order: the order they were given.
+
+        Args:
+            monitor_id: The monitor id.
+            offset: How many companies to skip, from the top (server default 0).
+            limit: How many companies to return (server default 100, maximum 1,000).
+
+        Returns:
+            A :class:`CompanyList`. Pass its ``next_offset`` as ``offset`` for the next
+            page; it is ``None`` on the last page.
+
+        Raises:
+            APIStatusError: ``409`` (``not_an_engine_monitor``): the monitor was created
+                without ``inputs``.
+            NotFoundError: The monitor does not exist, it is not yours, or it was created
+                with ``agent=False``.
+        """
+        path = _path(monitor_id, "/agent/companies")
+        return CompanyList.model_validate(
+            self._client._get(path, params=_page_params(offset, limit))
+        )
+
     def delete(self, monitor_id: str) -> None:
         """Delete a monitor. A repeat deletes what a failed delete left."""
         self._client._request("DELETE", _path(monitor_id))
@@ -1024,6 +1056,14 @@ class AsyncMonitorsResource:
         """Every kind and category the monitor collects. See :meth:`MonitorsResource.data_map`."""
         data = await self._client._get(_path(monitor_id, "/agent/data-map"))
         return DataMap.model_validate(data)
+
+    async def companies(
+        self, monitor_id: str, *, offset: int | None = None, limit: int | None = None
+    ) -> CompanyList:
+        """One page of the monitor's companies. See :meth:`MonitorsResource.companies`."""
+        path = _path(monitor_id, "/agent/companies")
+        data = await self._client._get(path, params=_page_params(offset, limit))
+        return CompanyList.model_validate(data)
 
     async def delete(self, monitor_id: str) -> None:
         """Delete a monitor. A repeat deletes what a failed delete left."""
