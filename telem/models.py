@@ -275,7 +275,7 @@ class AgentState(_Tolerant):
 class Monitor(_Tolerant):
     """A monitor: a query that Telem runs on a schedule."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
 
     id: str
     query: str
@@ -288,8 +288,9 @@ class Monitor(_Tolerant):
     #: When the monitor ends; ``None``: never.
     expires_at: str | None = None
     webhook_url: str | None = None
-    #: Signs the webhook deliveries. Only in the response that set ``webhook_url``.
-    webhook_secret: str | None = None
+    #: Signs the webhook deliveries. Only in the response that set ``webhook_url``. Not in
+    #: ``repr()``.
+    webhook_secret: str | None = Field(default=None, repr=False)
     #: The monitor agent; ``None`` for a monitor without one (``agent=False``), and from
     #: a router that does not say.
     agent_state: AgentState | None = None
@@ -306,7 +307,7 @@ class Monitor(_Tolerant):
 class MonitorPage(BaseModel):
     """One page of :meth:`~telem.resources.monitors.MonitorsResource.list_page`."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
 
     monitors: list[Monitor] = []
     #: Pass as ``cursor`` to get the next page; ``None`` on the last page.
@@ -316,7 +317,7 @@ class MonitorPage(BaseModel):
 class MonitorBatchResult(_Tolerant):
     """One monitor of :meth:`~telem.resources.monitors.MonitorsResource.create_many`."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
 
     #: The monitor's position in the list you passed.
     index: int
