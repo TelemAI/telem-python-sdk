@@ -49,6 +49,8 @@ from telem.models import (
     MonitorBatchResult,
     MonitorInputs,
     MonitorPage,
+    MonitorSchema,
+    MonitorSchemaAttribute,
     MonitorsChangesPage,
     OnboardingSheet,
     SearchResponse,
@@ -69,6 +71,11 @@ _NEEDS_TTL = (
 _NEEDS_TTL_INPUTS = (
     'A monitor with inputs must end: pass ttl, such as ttl="30d" (at most 365 days).'
 )
+#: Why a ``schema`` is refused before anything is sent, as the router would refuse it.
+_SCHEMA_NEEDS_AGENT = "schema needs the agent: leave agent on, or leave schema out."
+_SCHEMA_WITH_INPUTS = (
+    "schema is for a query monitor; a monitor with inputs sets its fields in inputs.schema."
+)
 
 
 def _inputs_body(inputs: dict[str, Any] | MonitorInputs) -> dict[str, Any]:
@@ -78,6 +85,23 @@ def _inputs_body(inputs: dict[str, Any] | MonitorInputs) -> dict[str, Any]:
         dumped = inputs.model_dump(by_alias=True)
         return {key: value for key, value in dumped.items() if value is not None}
     return inputs
+
+
+def _schema_body(schema: dict[str, Any] | MonitorSchema) -> dict[str, Any]:
+    """``schema`` for the wire: a dict as given, or a model's fields that are set. The
+    router checks every value."""
+    if isinstance(schema, MonitorSchema):
+        return schema.model_dump(mode="json", exclude_none=True)
+    attributes = schema.get("attributes") if isinstance(schema, Mapping) else None
+    if isinstance(attributes, list):
+        dumped = [
+            a.model_dump(mode="json", exclude_none=True)
+            if isinstance(a, MonitorSchemaAttribute)
+            else a
+            for a in attributes
+        ]
+        return {**schema, "attributes": dumped}
+    return schema
 
 
 def _create_body(
@@ -92,12 +116,17 @@ def _create_body(
     inputs: dict[str, Any] | MonitorInputs | None,
     *,
     preset: str | None = None,
+    schema: dict[str, Any] | MonitorSchema | None = None,
     tags: list[str] | None = None,
     fetch_new_results: bool | Mapping[str, Any] | FetchNewResults | None = None,
     default_vertical: str | None = None,
 ) -> dict[str, Any]:
     # An explicit ``None`` is the default, as it was before: the agent is on.
     agent_on = True if agent is None else bool(agent)
+    if schema is not None and not agent_on:
+        raise ValueError(_SCHEMA_NEEDS_AGENT)
+    if schema is not None and inputs is not None:
+        raise ValueError(_SCHEMA_WITH_INPUTS)
     if agent_on and not ttl:
         raise ValueError(_NEEDS_TTL if inputs is None else _NEEDS_TTL_INPUTS)
     options: dict[str, Any] = {}
@@ -123,6 +152,8 @@ def _create_body(
     body["agent"] = agent_on
     if preset is not None:
         body["preset"] = preset
+    if schema is not None:
+        body["schema"] = _schema_body(schema)
     if tags is not None:
         body["tags"] = tags
     if fetch_new_results is not None:
@@ -335,6 +366,7 @@ _ITEM_FIELDS = frozenset(
         "agent",
         "inputs",
         "preset",
+        "schema",
         "tags",
         "fetch_new_results",
         "idempotency_key",
@@ -374,6 +406,7 @@ def _batch_items(items: Sequence[Mapping[str, Any]], default_vertical: str | Non
                 item.get("agent"),
                 item.get("inputs"),
                 preset=item.get("preset"),
+                schema=item.get("schema"),
                 tags=item.get("tags"),
                 fetch_new_results=item.get("fetch_new_results"),
                 default_vertical=default_vertical,
@@ -576,6 +609,7 @@ class MonitorsResource:
         agent: bool = True,
         inputs: dict[str, Any] | MonitorInputs | None = None,
         preset: str | None = None,
+        schema: dict[str, Any] | MonitorSchema | None = None,
         tags: list[str] | None = None,
         fetch_new_results: bool | Mapping[str, Any] | FetchNewResults | None = None,
         idempotency_key: str | None = None,
@@ -613,6 +647,15 @@ class MonitorsResource:
                 ``"company"`` or ``"listing"``. The agent keeps those fields as they are and
                 may add more. Leave it out and the agent picks the fields from ``query``.
                 It needs the agent and is refused with ``inputs``.
+            schema: Fields of your own that every result has, kept as you set them: a
+                :class:`~telem.models.MonitorSchema`, or a dict with the router's shape,
+                ``{"attributes": [{"name": ..., "type": ...}, ...]}``, 1 to 20 of them. The
+                agent may add fields of its own. With a ``preset``, your field replaces the
+                preset's field of the same name. It needs the agent and is refused with
+                ``inputs``, before anything is sent; a monitor with ``inputs`` sets its fields
+                in ``inputs.schema``. Telem checks the rest and refuses a bad schema with a
+                422 whose ``param`` names the attribute. Read the fields back with
+                :meth:`agent`: yours have ``added_by`` ``"caller"``.
             tags: Labels of your own, to list the monitor by with ``list(tag=...)``: at
                 most 10. Telem strips and lower-cases each one, which must then be 1 to 32
                 of ``a-z``, ``0-9``, ``-`` and ``_``, starting with a letter or digit, and
@@ -641,8 +684,9 @@ class MonitorsResource:
             only in this response.
 
         Raises:
-            ValueError: The agent is on and ``ttl`` is missing, or ``idempotency_key`` is
-                not valid. Nothing was sent.
+            ValueError: The agent is on and ``ttl`` is missing, ``schema`` is given with
+                ``agent=False`` or with ``inputs``, or ``idempotency_key`` is not valid.
+                Nothing was sent.
             TelemTimeoutError: The last retry timed out too. The monitor may exist.
         """
         body = _create_body(
@@ -656,6 +700,7 @@ class MonitorsResource:
             agent,
             inputs,
             preset=preset,
+            schema=schema,
             tags=tags,
             fetch_new_results=fetch_new_results,
             default_vertical=self._client.default_vertical,
@@ -684,6 +729,7 @@ class MonitorsResource:
                 ``tags``, ``fetch_new_results``, ``webhook_url``, ``metadata``, ``search``,
                 ``include_domains`` and ``idempotency_key``. Each monitor gets its own key: a new one, or
                 yours. Pass your own keys to send the list again after a restart.
+                A monitor takes ``schema`` too, as in :meth:`create`.
 
         More than ten monitors go in calls of ten, one after the other. Each call is
         retried as :meth:`create` is, and after a ``502`` or ``504`` too: the call may have
@@ -1158,6 +1204,7 @@ class AsyncMonitorsResource:
         agent: bool = True,
         inputs: dict[str, Any] | MonitorInputs | None = None,
         preset: str | None = None,
+        schema: dict[str, Any] | MonitorSchema | None = None,
         tags: list[str] | None = None,
         fetch_new_results: bool | Mapping[str, Any] | FetchNewResults | None = None,
         idempotency_key: str | None = None,
@@ -1175,6 +1222,7 @@ class AsyncMonitorsResource:
             agent,
             inputs,
             preset=preset,
+            schema=schema,
             tags=tags,
             fetch_new_results=fetch_new_results,
             default_vertical=self._client.default_vertical,

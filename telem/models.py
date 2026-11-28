@@ -496,6 +496,47 @@ class MonitorInputs(BaseModel):
     seed: bool | None = None
 
 
+class MonitorSchemaAttribute(BaseModel):
+    """One attribute of a :class:`MonitorSchema`: a field every result has, as you set it.
+
+    A field is sent only when it is set, and the router checks every value. A field this
+    model does not name is sent too, as given.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    #: The field's name, in snake_case, such as ``"funding_round"``.
+    name: str
+    #: ``"text"``, ``"number"``, ``"date"``, ``"enum"`` or ``"bool"``.
+    type: str
+    #: An enum's values, at most 50.
+    values: list[str] | None = None
+    #: A literal enum's phrases that show each value: ``{value: [phrase, ...]}``.
+    evidence: dict[str, list[str]] | None = None
+    #: A number's unit, such as ``"USD"``.
+    unit: str | None = None
+    #: How the value is written, such as ``"YYYY-MM-DD"``.
+    format: str | None = None
+    #: Where on the page the value is stated. Leave it out for the default.
+    where: str | None = None
+    #: An enum's grounding: ``"literal"`` or ``"classified"``.
+    grounding: str | None = None
+
+
+class MonitorSchema(BaseModel):
+    """The fields every result of a query monitor has, fixed by you: the ``schema`` of
+    :meth:`~telem.resources.monitors.MonitorsResource.create`. It is not the ``schema`` of
+    :class:`MonitorInputs`, which is for a monitor of a list of companies.
+
+    A field this model does not name is sent too, as given.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    #: 1 to 20 attributes, each a :class:`MonitorSchemaAttribute` or a dict.
+    attributes: list[MonitorSchemaAttribute]
+
+
 class OnboardingExample(_Tolerant):
     """One example of a candidate: the name it was found under, the quote and its page."""
 
