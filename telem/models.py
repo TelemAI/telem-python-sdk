@@ -334,6 +334,16 @@ class MonitorBatchResult(_Tolerant):
     idempotency_key: str
 
 
+class FetchNewResults(BaseModel):
+    """Whether the monitor agent fetches each run's new search results before it reads
+    them (``on``), and at most how many pages a run (``cap_per_run``)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    on: bool = Field(strict=True)
+    cap_per_run: int = Field(strict=True)
+
+
 class AgentDocument(BaseModel):
     """The agent of a monitor: :meth:`~telem.resources.monitors.MonitorsResource.agent`.
 
@@ -354,8 +364,24 @@ class AgentDocument(BaseModel):
     budget: dict[str, Any] | None = None
     #: What the agent has spent so far, in US dollars.
     spend_usd: float | None = None
+    #: The plan's ``fetch_new_results``; ``None`` before the first plan, or when the router
+    #: does not send it.
+    fetch_new_results: FetchNewResults | None = None
     #: The whole document, as the router sent it.
     raw: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _plan_fetch_new(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or "spec" not in data:
+            return data
+        spec = data["spec"]
+        held = spec.get("fetch_new_results") if isinstance(spec, dict) else None
+        try:
+            found = FetchNewResults.model_validate(held) if isinstance(held, dict) else None
+        except ValidationError:
+            found = None
+        return {**data, "fetch_new_results": found}
 
 
 class ChangeSubject(_Tolerant):

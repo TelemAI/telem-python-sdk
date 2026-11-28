@@ -44,6 +44,7 @@ from telem.models import (
     DataMap,
     ExpansionsPage,
     FeedbackResult,
+    FetchNewResults,
     Monitor,
     MonitorBatchResult,
     MonitorInputs,
@@ -92,6 +93,7 @@ def _create_body(
     *,
     preset: str | None = None,
     tags: list[str] | None = None,
+    fetch_new_results: bool | Mapping[str, Any] | FetchNewResults | None = None,
     default_vertical: str | None = None,
 ) -> dict[str, Any]:
     # An explicit ``None`` is the default, as it was before: the agent is on.
@@ -123,7 +125,21 @@ def _create_body(
         body["preset"] = preset
     if tags is not None:
         body["tags"] = tags
+    if fetch_new_results is not None:
+        body["fetch_new_results"] = _fetch_new_body(fetch_new_results)
     return body
+
+
+def _fetch_new_body(value: bool | Mapping[str, Any] | FetchNewResults) -> dict[str, Any]:
+    """``True``/``False`` turn it on or off at the default cap; a mapping or the read-back
+    model is sent as ``{"on", "cap_per_run"}``. The router checks the values."""
+    if isinstance(value, bool):
+        return {"on": value}
+    if isinstance(value, FetchNewResults):
+        return value.model_dump()
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise ValueError("fetch_new_results must be True, False or {'on': ..., 'cap_per_run': ...}")
 
 
 def _search_block(search: dict[str, Any]) -> dict[str, Any]:
@@ -320,6 +336,7 @@ _ITEM_FIELDS = frozenset(
         "inputs",
         "preset",
         "tags",
+        "fetch_new_results",
         "idempotency_key",
     }
 )
@@ -358,6 +375,7 @@ def _batch_items(items: Sequence[Mapping[str, Any]], default_vertical: str | Non
                 item.get("inputs"),
                 preset=item.get("preset"),
                 tags=item.get("tags"),
+                fetch_new_results=item.get("fetch_new_results"),
                 default_vertical=default_vertical,
             )
             body["idempotency_key"] = resolve_idempotency_key(item.get("idempotency_key"))
@@ -559,6 +577,7 @@ class MonitorsResource:
         inputs: dict[str, Any] | MonitorInputs | None = None,
         preset: str | None = None,
         tags: list[str] | None = None,
+        fetch_new_results: bool | Mapping[str, Any] | FetchNewResults | None = None,
         idempotency_key: str | None = None,
     ) -> Monitor:
         """Create a monitor. Telem runs ``query`` on the schedule, and its agent checks
@@ -598,6 +617,12 @@ class MonitorsResource:
                 most 10. Telem strips and lower-cases each one, which must then be 1 to 32
                 of ``a-z``, ``0-9``, ``-`` and ``_``, starting with a letter or digit, and
                 drops repeats. Anything else is refused with a 422.
+            fetch_new_results: Whether the agent fetches each run's new search results
+                before it reads them: ``True``, ``False``, or
+                ``{"on": True, "cap_per_run": 5}`` for at most that many pages a run (1 to
+                25, default 10). Leave it out and an article monitor fetches them, at most
+                10 a run. It needs the agent and is refused with ``inputs``. Read it back
+                with :meth:`agent` (``fetch_new_results``).
             idempotency_key: The ``Idempotency-Key`` header, 1 to 255 visible ASCII
                 characters. By default each call makes a new one. Pass your own to
                 retry a create across a restart.
@@ -632,6 +657,7 @@ class MonitorsResource:
             inputs,
             preset=preset,
             tags=tags,
+            fetch_new_results=fetch_new_results,
             default_vertical=self._client.default_vertical,
         )
         headers = {"Idempotency-Key": resolve_idempotency_key(idempotency_key)}
@@ -655,8 +681,8 @@ class MonitorsResource:
         Args:
             items: One dict per monitor, with the arguments of :meth:`create`: ``query``,
                 and any of ``frequency``, ``ttl``, ``agent``, ``inputs``, ``preset``,
-                ``tags``, ``webhook_url``, ``metadata``, ``search``, ``include_domains``
-                and ``idempotency_key``. Each monitor gets its own key: a new one, or
+                ``tags``, ``fetch_new_results``, ``webhook_url``, ``metadata``, ``search``,
+                ``include_domains`` and ``idempotency_key``. Each monitor gets its own key: a new one, or
                 yours. Pass your own keys to send the list again after a restart.
 
         More than ten monitors go in calls of ten, one after the other. Each call is
@@ -1133,6 +1159,7 @@ class AsyncMonitorsResource:
         inputs: dict[str, Any] | MonitorInputs | None = None,
         preset: str | None = None,
         tags: list[str] | None = None,
+        fetch_new_results: bool | Mapping[str, Any] | FetchNewResults | None = None,
         idempotency_key: str | None = None,
     ) -> Monitor:
         """Create a monitor. It has the agent unless ``agent=False``, and with the agent
@@ -1149,6 +1176,7 @@ class AsyncMonitorsResource:
             inputs,
             preset=preset,
             tags=tags,
+            fetch_new_results=fetch_new_results,
             default_vertical=self._client.default_vertical,
         )
         headers = {"Idempotency-Key": resolve_idempotency_key(idempotency_key)}
