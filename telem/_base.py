@@ -609,11 +609,17 @@ def _jittered(wait: float) -> float:
     return wait + random.random() * max(1.0, wait / 2)
 
 
-def create_retry_wait(error: TelemError, attempt: int, elapsed: float) -> float | None:
+#: What the edge answers a call that outlasted it: the router may still have done the work.
+GATEWAY_TIMEOUTS = frozenset({502, 504})
+
+
+def create_retry_wait(
+    error: TelemError, attempt: int, elapsed: float, *, gateway_timeouts: bool = False
+) -> float | None:
     """Seconds to wait before retrying a create sent with an ``Idempotency-Key``, or
     ``None`` when ``error`` is final or the wait would end past the budget. The key
     makes a retry after a lost reply return the first monitor, so a timeout or a
-    connection failure is retried too."""
+    connection failure is retried too, and with ``gateway_timeouts`` a 502 or 504."""
     if attempt >= _CREATE_MAX_RETRIES:
         return None
     if isinstance(error, TelemConnectionError):
@@ -621,6 +627,8 @@ def create_retry_wait(error: TelemError, attempt: int, elapsed: float) -> float 
             return None
     elif not isinstance(error, APIStatusError):
         return None
+    elif gateway_timeouts and error.status_code in GATEWAY_TIMEOUTS:
+        pass
     elif error.status_code == 409:
         envelope = error.body.get("error") if isinstance(error.body, dict) else None
         if not isinstance(envelope, dict) or envelope.get("code") != "idempotency_in_progress":
@@ -629,7 +637,22 @@ def create_retry_wait(error: TelemError, attempt: int, elapsed: float) -> float 
         return None
     retry_after = error.retry_after
     if retry_after is not None and _RETRY_AFTER_SECONDS.fullmatch(retry_after):
-        wait = _jittered(float(retry_after))
+        return _create_wait(float(retry_after), attempt, elapsed)
+    return _create_wait(None, attempt, elapsed)
+
+
+def batch_retry_wait(retry_afters: list[int | None], attempt: int, elapsed: float) -> float | None:
+    """Seconds to wait before re-sending the items of a bulk create that Telem asked to come
+    back later: the longest of their ``retry_after``, or ``None`` past the budget."""
+    if attempt >= _CREATE_MAX_RETRIES:
+        return None
+    known = [s for s in retry_afters if isinstance(s, int) and not isinstance(s, bool) and s >= 0]
+    return _create_wait(float(max(known)) if known else None, attempt, elapsed)
+
+
+def _create_wait(retry_after: float | None, attempt: int, elapsed: float) -> float | None:
+    if retry_after is not None:
+        wait = _jittered(retry_after)
     else:
         wait = min(_jittered(_RETRY_BASE_WAIT * 2**attempt), _MAX_BACKOFF_WAIT)
     return None if elapsed + wait > _CREATE_RETRY_BUDGET else wait

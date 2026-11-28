@@ -16,14 +16,23 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import re
 import time
 import warnings
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Generator, Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from telem._base import _iso, create_retry_wait, path_segment, resolve_idempotency_key
+from pydantic import ValidationError
+
+from telem._base import (
+    _iso,
+    batch_retry_wait,
+    create_retry_wait,
+    path_segment,
+    resolve_idempotency_key,
+)
 from telem._normalize import build_search_response
 from telem.errors import TelemError, TelemTimeoutError
 from telem.models import (
@@ -36,6 +45,7 @@ from telem.models import (
     ExpansionsPage,
     FeedbackResult,
     Monitor,
+    MonitorBatchResult,
     MonitorInputs,
     MonitorPage,
     MonitorsChangesPage,
@@ -288,9 +298,202 @@ def _reads_across_on(page: MonitorsChangesPage, cursor: str | None) -> bool:
 #: Added to a create that timed out: the router may have made the monitor anyway.
 _MAY_EXIST = "The monitor may exist: list monitors before you create it again."
 
+_MAY_EXIST_MANY = "The monitors may exist: list monitors before you create them again."
+
 _sleep = time.sleep
 _async_sleep = asyncio.sleep
 _clock = time.monotonic
+
+_BATCH_PATH = "/v1/monitors:batch"
+#: The most monitors one ``POST /v1/monitors:batch`` takes.
+_BATCH_SIZE = 10
+_ITEM_FIELDS = frozenset(
+    {
+        "query",
+        "frequency",
+        "metadata",
+        "webhook_url",
+        "ttl",
+        "search",
+        "include_domains",
+        "agent",
+        "inputs",
+        "preset",
+        "tags",
+        "idempotency_key",
+    }
+)
+
+#: A step of a bulk create: ``("post", body)`` or ``("sleep", seconds)``. The post's
+#: answer is sent back in, or its ``TelemError`` thrown in.
+_Steps = Generator[tuple[str, Any], Any, list[MonitorBatchResult]]
+
+
+def _batch_items(items: Sequence[Mapping[str, Any]], default_vertical: str | None) -> list[dict]:
+    """Every monitor's wire body with its ``idempotency_key``, all checked before any is sent."""
+    if isinstance(items, (str, bytes, Mapping)):
+        raise ValueError("create_many takes a list of monitors, each a dict of create's arguments")
+    bodies = []
+    given: dict[str, int] = {}
+    for index, item in enumerate(items):
+        try:
+            if not isinstance(item, Mapping):
+                raise ValueError("a monitor must be a dict of create's arguments")
+            unknown = sorted(set(item) - _ITEM_FIELDS)
+            if unknown:
+                raise ValueError(f"unknown argument {unknown[0]!r}")
+            if item.get("query") is None:
+                raise ValueError("query is required")
+            if not isinstance(item["query"], str):
+                raise ValueError("query must be a string")
+            body = _create_body(
+                item["query"],
+                item.get("frequency"),
+                item.get("metadata"),
+                item.get("webhook_url"),
+                item.get("ttl"),
+                item.get("search"),
+                item.get("include_domains"),
+                item.get("agent"),
+                item.get("inputs"),
+                preset=item.get("preset"),
+                tags=item.get("tags"),
+                default_vertical=default_vertical,
+            )
+            body["idempotency_key"] = resolve_idempotency_key(item.get("idempotency_key"))
+            try:
+                json.dumps(body, allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"not JSON: {exc}") from None
+        except ValueError as exc:
+            raise ValueError(f"monitor {index}: {exc}") from exc
+        bodies.append(body)
+        if item.get("idempotency_key") is not None:
+            first = given.setdefault(body["idempotency_key"], index)
+            if first != index:
+                raise ValueError(f"monitors {first} and {index} have the same idempotency_key")
+    return bodies
+
+
+def _batch_answer(
+    data: Any, sent: list[int], keys: list[str]
+) -> tuple[dict[int, MonitorBatchResult], TelemError | None]:
+    """The results of one batch call by their place in the whole list, and the first
+    malformed entry's error, if any. ``sent`` holds the place of each monitor sent; the
+    answer's ``index`` is a position in it."""
+    results = data.get("results") if isinstance(data, dict) else None
+    count = f"the batch answer does not have one result for each of the {len(sent)} monitors"
+    if not isinstance(results, list):
+        return {}, TelemError(f"{count} sent")
+    answer: dict[int, MonitorBatchResult] = {}
+    # A wrong count still keeps each entry it can place.
+    problem = TelemError(f"{count} sent") if len(results) != len(sent) else None
+    for entry in results:
+        try:
+            position, result = _batch_entry(entry, sent, keys, answer)
+        except TelemError as exc:
+            problem = problem or exc
+            continue
+        answer[position] = result
+    return answer, problem
+
+
+def _batch_entry(
+    entry: Any, sent: list[int], keys: list[str], answer: dict[int, MonitorBatchResult]
+) -> tuple[int, MonitorBatchResult]:
+    index = entry.get("index") if isinstance(entry, dict) else None
+    if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(sent):
+        raise TelemError("a batch result has no valid index")
+    status = entry.get("status")
+    if not isinstance(status, int) or isinstance(status, bool):
+        raise TelemError(f"batch result {index} has no status")
+    position = sent[index]
+    if position in answer:
+        raise TelemError(f"two batch results have index {index}")
+    fields = {**entry, "index": position, "idempotency_key": keys[position]}
+    try:
+        return position, MonitorBatchResult.model_validate(fields)
+    except ValidationError as exc:
+        # Named by field only: the values can hold a webhook_secret.
+        bad = sorted({".".join(map(str, e["loc"])) for e in exc.errors(include_input=False)})
+        raise TelemError(f"batch result {index} is not valid: {', '.join(bad)}") from None
+
+
+def _comes_back(result: MonitorBatchResult | None) -> bool:
+    """Whether this monitor has no final answer: none yet, a ``429``, or a ``409``
+    ``idempotency_in_progress`` (its first create is still running)."""
+    if result is None or result.status == 429:
+        return True
+    return result.status == 409 and (result.error or {}).get("code") == "idempotency_in_progress"
+
+
+def _failed(
+    error: TelemError, results: list[MonitorBatchResult | None], keys: list[str]
+) -> TelemError:
+    """``error`` as raised by a bulk create once a call was sent: monitors may exist, so it
+    says so, with the results so far and every key."""
+    note = "" if error.message.endswith(".") else "."
+    message = f"{error.message}{note} {_MAY_EXIST_MANY}"
+    raised = type(error)(message, status_code=error.status_code, body=error.body)
+    raised.retry_after = error.retry_after
+    raised.results = [result for result in results if result is not None]
+    raised.idempotency_keys = list(keys)
+    return raised
+
+
+def _keep(error: BaseException, results: list[MonitorBatchResult | None], keys: list[str]) -> None:
+    """Put the results so far and every key on an exception that stopped a bulk create after
+    a call was sent, such as a cancel or a ``KeyboardInterrupt``, where it takes them."""
+    if isinstance(error, GeneratorExit):
+        return
+    try:
+        error.results = [result for result in results if result is not None]
+        error.idempotency_keys = list(keys)
+    except AttributeError:
+        pass
+
+
+def _create_many_steps(bodies: list[dict]) -> _Steps:
+    """A bulk create, ten monitors per call, one call at a time. Each call is retried as
+    a create is; then only its monitors that Telem asked for again are sent again, with
+    their keys, until none is left or the next wait would end past the budget. A call that
+    fails whole raises, with the answers so far and every key on the error."""
+    keys = [body["idempotency_key"] for body in bodies]
+    results: list[MonitorBatchResult | None] = [None] * len(bodies)
+    for offset in range(0, len(bodies), _BATCH_SIZE):
+        pending = list(range(offset, min(offset + _BATCH_SIZE, len(bodies))))
+        attempt, started = 0, _clock()
+        while True:
+            try:
+                data = yield ("post", {"monitors": [bodies[i] for i in pending]})
+            except TelemError as exc:
+                elapsed = _clock() - started
+                wait = create_retry_wait(exc, attempt, elapsed, gateway_timeouts=True)
+                if wait is None:
+                    raise _failed(exc, results, keys) from exc
+            except BaseException as exc:
+                _keep(exc, results, keys)
+                raise
+            else:
+                answer, problem = _batch_answer(data, pending, keys)
+                for i, result in answer.items():
+                    results[i] = result
+                if problem is not None:
+                    raise _failed(problem, results, keys) from None
+                pending = [i for i in pending if _comes_back(results[i])]
+                if not pending:
+                    break
+                retry_afters = [results[i].retry_after for i in pending]
+                wait = batch_retry_wait(retry_afters, attempt, _clock() - started)
+                if wait is None:
+                    break
+            try:
+                yield ("sleep", wait)
+            except BaseException as exc:
+                _keep(exc, results, keys)
+                raise
+            attempt += 1
+    return results
 
 
 def _page_from(data: Any) -> MonitorPage:
@@ -445,6 +648,65 @@ class MonitorsResource:
                     raise
             _sleep(wait)
             attempt += 1
+
+    def create_many(self, items: Sequence[Mapping[str, Any]]) -> list[MonitorBatchResult]:
+        """Create many monitors, ten per call. A monitor that fails does not stop the others.
+
+        Args:
+            items: One dict per monitor, with the arguments of :meth:`create`: ``query``,
+                and any of ``frequency``, ``ttl``, ``agent``, ``inputs``, ``preset``,
+                ``tags``, ``webhook_url``, ``metadata``, ``search``, ``include_domains``
+                and ``idempotency_key``. Each monitor gets its own key: a new one, or
+                yours. Pass your own keys to send the list again after a restart.
+
+        More than ten monitors go in calls of ten, one after the other. Each call is
+        retried as :meth:`create` is, and after a ``502`` or ``504`` too: the call may have
+        outlasted the edge. Then the monitors that Telem answered with a
+        ``429`` (or a ``409`` ``idempotency_in_progress``) are sent again, with the same
+        keys, after the longest ``retry_after`` among them, for up to about 120 seconds
+        per call. Any other error of a monitor is its result and is not retried.
+
+        Returns:
+            One :class:`MonitorBatchResult` per monitor, in the order of ``items``: its
+            ``status``, its ``monitor`` or its ``error``, and its ``idempotency_key``. A
+            monitor still answered with a ``429`` or a ``409`` ``idempotency_in_progress``
+            (it is still being made) when the time is up keeps that result: send it again
+            later with the same key. A made monitor's ``webhook_secret`` is in its
+            result, here and in an error's ``results``: do not log them whole.
+
+        Raises:
+            ValueError: A monitor is not valid, as in :meth:`create`, is not JSON, or has
+                the same ``idempotency_key`` as another; the message names its index.
+                Nothing was sent.
+            TelemError: A call failed whole, a ``429`` past the time included, or its
+                answer was not valid. The error's ``results`` holds the last answer of
+                each monitor answered so far and its ``idempotency_keys`` the key of every
+                monitor, in the order of ``items``: send the monitors without a ``201``
+                or ``200`` again with the same keys. Once a call was sent, its message
+                always says that monitors may exist. An entry of an answer that cannot be
+                read, a made monitor's included, is left out of ``results``; its key is
+                still in ``idempotency_keys``.
+
+        A ``create_many`` stopped part way after a call was sent, cancelled on
+        :class:`~telem.AsyncTelem` or by a ``KeyboardInterrupt``, raises that exception
+        unchanged, with ``results`` and ``idempotency_keys`` put on it.
+        """
+        steps = _create_many_steps(_batch_items(items, self._client.default_vertical))
+        reply: Any = None
+        while True:
+            try:
+                kind, value = (
+                    steps.throw(reply) if isinstance(reply, BaseException) else steps.send(reply)
+                )
+            except StopIteration as stop:
+                return stop.value
+            try:
+                if kind == "sleep":
+                    reply = _sleep(value)
+                else:
+                    reply = self._client._post(_BATCH_PATH, value)
+            except BaseException as exc:  # the steps keep the keys on it, then re-raise it
+                reply = exc
 
     def list(
         self, *, limit: int | None = None, cursor: str | None = None, tag: str | None = None
@@ -903,6 +1165,25 @@ class AsyncMonitorsResource:
                     raise
             await _async_sleep(wait)
             attempt += 1
+
+    async def create_many(self, items: Sequence[Mapping[str, Any]]) -> list[MonitorBatchResult]:
+        """Create many monitors, ten per call. See :meth:`MonitorsResource.create_many`."""
+        steps = _create_many_steps(_batch_items(items, self._client.default_vertical))
+        reply: Any = None
+        while True:
+            try:
+                kind, value = (
+                    steps.throw(reply) if isinstance(reply, BaseException) else steps.send(reply)
+                )
+            except StopIteration as stop:
+                return stop.value
+            try:
+                if kind == "sleep":
+                    reply = await _async_sleep(value)
+                else:
+                    reply = await self._client._post(_BATCH_PATH, value)
+            except BaseException as exc:  # the steps keep the keys on it, then re-raise it
+                reply = exc
 
     async def list(
         self, *, limit: int | None = None, cursor: str | None = None, tag: str | None = None

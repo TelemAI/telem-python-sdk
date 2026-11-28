@@ -193,6 +193,24 @@ lost connection for up to about 2 minutes, with the same key. For 24 hours, a re
 with the same key returns the first monitor instead of creating a second one. A
 different API key makes a new monitor.
 
+`create_many` takes a list of dicts of `create`'s arguments and returns one
+`MonitorBatchResult` per monitor, in your order: its `status`, and its `monitor` or its
+`error`, and its `idempotency_key`. It sends them in calls of 10, gives each its own key
+(or yours, as `idempotency_key`), and sends again only the monitors answered with a `429`
+or a `409` `idempotency_in_progress` (still being made). A call that fails whole raises
+with `results` (each monitor's last answer so far) and `idempotency_keys` (every key), and
+says the monitors may exist: send the monitors without a final `201` or `200` again with
+the same keys.
+
+```python
+results = client.monitors.create_many([
+    {"query": "Nvidia files a new 8-K with the SEC", "ttl": "30d"},
+    {"query": "AMD files a new 8-K with the SEC", "ttl": "30d", "frequency": "1h"},
+])
+for result in results:   # one per monitor, in your order
+    print(result.index, result.status, result.monitor.id if result.monitor else result.error)
+```
+
 `client.monitors` also has `get` and `list`. `poll` is deprecated and warns once:
 read the agent's changes with `iter_changes` instead.
 See [Monitors](https://docs.telem.ai/resources/monitors/) for the fields, the errors and

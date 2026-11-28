@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class TelemError(Exception):
     """Base class for all errors raised by the Telem SDK.
@@ -11,9 +13,13 @@ class TelemError(Exception):
         status_code: The HTTP status code that triggered the error, if any.
         body: The parsed response body (dict) or raw text that triggered the error, if any.
         retry_after: The response's ``Retry-After`` header, if it sent one.
+        results: From ``monitors.create_many()``: the monitors answered before it failed.
+        idempotency_keys: From ``monitors.create_many()``: every monitor's key, in order.
     """
 
     retry_after: str | None = None
+    results: list[Any] | None = None
+    idempotency_keys: list[str] | None = None
 
     def __init__(
         self,

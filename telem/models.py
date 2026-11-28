@@ -313,6 +313,26 @@ class MonitorPage(BaseModel):
     next_cursor: str | None = None
 
 
+class MonitorBatchResult(_Tolerant):
+    """One monitor of :meth:`~telem.resources.monitors.MonitorsResource.create_many`."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    #: The monitor's position in the list you passed.
+    index: int
+    #: ``201``: made. ``200`` with ``replayed``: made before, under the same key. Any
+    #: other status is this monitor's own error.
+    status: int
+    monitor: Monitor | None = None
+    replayed: bool = False
+    #: ``{"code", "message"}``, and ``"param"`` when a field is at fault.
+    error: dict[str, Any] | None = None
+    #: With a ``429``: the seconds to wait before you send this monitor again.
+    retry_after: int | None = None
+    #: The key this monitor was sent with: send it again with the same key.
+    idempotency_key: str
+
+
 class AgentDocument(BaseModel):
     """The agent of a monitor: :meth:`~telem.resources.monitors.MonitorsResource.agent`.
 
