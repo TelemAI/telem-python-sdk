@@ -2,9 +2,68 @@
 
 from __future__ import annotations
 
-from typing import Any
+import logging
+from typing import Any, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ModelWrapValidatorHandler,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _holds_models(annotation: Any) -> bool:
+    """Whether a field's type has a model in it (``Foo``, ``list[Foo]``, ``Foo | None``)."""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return True
+    return any(_holds_models(arg) for arg in get_args(annotation))
+
+
+def _tolerant(cls: type[BaseModel], data: Any, handler: ModelWrapValidatorHandler, raw: bool):
+    """``handler(data)``; on a ValidationError, the record again without the optional fields
+    that failed (each takes its default), logged at debug: one malformed item never fails a
+    whole list. A required field that fails still raises. With ``raw``, ``raw`` holds the
+    record as sent, the dropped fields too."""
+    extra = {"raw": data} if raw and isinstance(data, dict) else {}
+    try:
+        return handler({**data, **extra} if extra else data)
+    except ValidationError as exc:
+        if not isinstance(data, dict):
+            raise
+        by_key = {info.alias or name: info for name, info in cls.model_fields.items()}
+        bad: set[str] = set()
+        for error in exc.errors():
+            loc = error.get("loc") or ()
+            if not loc:
+                continue
+            key = str(loc[0])
+            info = by_key.get(key)
+            # An error deeper inside a field that holds models is a nested model's own: it
+            # left its optional fields unset already, so what is left (a required field, a
+            # non-object item) raises as before rather than emptying a list or a sub-record.
+            if len(loc) > 1 and info is not None and _holds_models(info.annotation):
+                raise
+            bad.add(key)
+        required = {key for key, info in by_key.items() if info.is_required()}
+        if not bad or bad & required or "raw" in bad:
+            raise
+        logger.debug("telem: %s dropped malformed fields %s", cls.__name__, sorted(bad))
+        return handler({**{k: v for k, v in data.items() if k not in bad}, **extra})
+
+
+class _Tolerant(BaseModel):
+    """A list item: a malformed optional field is left unset on this item only."""
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _drop_malformed(cls, data: Any, handler: ModelWrapValidatorHandler) -> Any:
+        return _tolerant(cls, data, handler, raw=False)
 
 
 class SearchResult(BaseModel):
@@ -130,7 +189,7 @@ class FetchResponse(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
-class ProviderInfo(BaseModel):
+class ProviderInfo(_Tolerant):
     """Metadata describing an available search provider (preprocessor)."""
 
     model_config = ConfigDict(extra="ignore")
@@ -147,7 +206,7 @@ class ProviderInfo(BaseModel):
     auto_routed: bool | None = None
 
 
-class SessionSummary(BaseModel):
+class SessionSummary(_Tolerant):
     """Summary metadata for a session listed by :meth:`SessionsResource.list`."""
 
     model_config = ConfigDict(extra="ignore")
@@ -181,7 +240,7 @@ class SessionResults(BaseModel):
     previous_preprocessor_results: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class AgentCompileState(BaseModel):
+class AgentCompileState(_Tolerant):
     """The job that makes the agent's plan: ``AgentState.compile``."""
 
     model_config = ConfigDict(extra="ignore")
@@ -192,7 +251,7 @@ class AgentCompileState(BaseModel):
     error: str | None = None
 
 
-class AgentState(BaseModel):
+class AgentState(_Tolerant):
     """What the monitor agent is doing: ``Monitor.agent_state``."""
 
     model_config = ConfigDict(extra="ignore")
@@ -213,7 +272,7 @@ class AgentState(BaseModel):
     compile: AgentCompileState | None = None
 
 
-class Monitor(BaseModel):
+class Monitor(_Tolerant):
     """A monitor: a query that Telem runs on a schedule."""
 
     model_config = ConfigDict(extra="ignore")
@@ -241,6 +300,9 @@ class Monitor(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+# The page models with cursors (MonitorPage, ChangesPage, MonitorsChangesPage) stay strict: a
+# malformed cursor that read as its default would end pagination silently. Their items are
+# _Tolerant.
 class MonitorPage(BaseModel):
     """One page of :meth:`~telem.resources.monitors.MonitorsResource.list_page`."""
 
@@ -275,7 +337,7 @@ class AgentDocument(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
-class ChangeSubject(BaseModel):
+class ChangeSubject(_Tolerant):
     """The item a change is about.
 
     ``entity_id`` is ``None`` for a change to the whole monitor, such as a run or a plan
@@ -288,7 +350,7 @@ class ChangeSubject(BaseModel):
     name: str | None = None
 
 
-class ChangeRecord(BaseModel):
+class ChangeRecord(_Tolerant):
     """One change of the monitor agent: the records of :class:`ChangesPage`."""
 
     model_config = ConfigDict(extra="ignore")
@@ -387,7 +449,7 @@ class MonitorInputs(BaseModel):
     seed: bool | None = None
 
 
-class OnboardingExample(BaseModel):
+class OnboardingExample(_Tolerant):
     """One example of a candidate: the name it was found under, the quote and its page."""
 
     model_config = ConfigDict(extra="ignore")
@@ -397,7 +459,7 @@ class OnboardingExample(BaseModel):
     url: str | None = None
 
 
-class OnboardingCandidate(BaseModel):
+class OnboardingCandidate(_Tolerant):
     """One candidate of a company's sheet: a kind of item or of event found on its pages."""
 
     model_config = ConfigDict(extra="ignore")
@@ -425,7 +487,7 @@ class OnboardingCandidate(BaseModel):
         return len(value) if isinstance(value, list) else value
 
 
-class CompanySheet(BaseModel):
+class CompanySheet(_Tolerant):
     """What the first read of one company found: ``OnboardingCompany.sheet``."""
 
     model_config = ConfigDict(extra="ignore")
@@ -438,7 +500,7 @@ class CompanySheet(BaseModel):
     note: str | None = None
 
 
-class OnboardingCompany(BaseModel):
+class OnboardingCompany(_Tolerant):
     """One company of :class:`OnboardingSheet`, and its sheet once it is done."""
 
     model_config = ConfigDict(extra="ignore")
@@ -466,10 +528,10 @@ class _KeepsRaw(BaseModel):
     #: The whole object, as the router sent it.
     raw: dict[str, Any] = Field(default_factory=dict)
 
-    @model_validator(mode="before")
+    @model_validator(mode="wrap")
     @classmethod
-    def _keep_raw(cls, data: Any) -> Any:
-        return {**data, "raw": data} if isinstance(data, dict) else data
+    def _keep_raw(cls, data: Any, handler: ModelWrapValidatorHandler) -> Any:
+        return _tolerant(cls, data, handler, raw=True)
 
 
 class OnboardingSheet(_KeepsRaw):
