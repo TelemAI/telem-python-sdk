@@ -84,7 +84,9 @@ client = Telem(api_key="tlm_...", base_url="https://router.telem.ai", default_ti
 ```
 
 The request timeout defaults to **60 s** (the server grants provider timeouts that long at
-the `max` tier and with full content); pass `timeout=` to change it.
+the `max` tier and with full content); pass `timeout=` to change it. A read (`GET`) is sent
+again after a 5xx, a 429 or a lost connection, twice by default; pass `max_retries=` to
+change it (`0` turns it off). Writes, such as a search, are sent once.
 
 ## Search
 

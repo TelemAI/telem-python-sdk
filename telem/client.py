@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from datetime import date
 from typing import Any
 
 import httpx
 
-from telem._base import _DEFAULT_TIMEOUT, BaseClient
+from telem._base import _DEFAULT_MAX_RETRIES, _DEFAULT_TIMEOUT, BaseClient, read_retry_wait
 from telem._normalize import build_fetch_response, build_search_response
+from telem.errors import TelemError
 from telem.models import FetchResponse, ProviderInfo, SearchResponse
 from telem.resources.monitors import MonitorsResource
 from telem.resources.sessions import SessionsResource
+
+
+_sleep = time.sleep
 
 
 class Telem(BaseClient):
@@ -45,6 +50,7 @@ class Telem(BaseClient):
         # the router accepts the field. See BaseClient.
         default_vertical: str | None = None,
         vertical: str | None = None,
+        max_retries: int = _DEFAULT_MAX_RETRIES,
     ) -> None:
         """Create a synchronous Telem client.
 
@@ -56,6 +62,9 @@ class Telem(BaseClient):
             base_url: API base URL. Falls back to ``TELEM_BASE_URL``, then to the same
                 credentials file, then the hosted deployment at router.telem.ai.
             timeout: Request timeout in seconds.
+            max_retries: How many times a read (GET) is sent again after a 5xx, a 429 or a
+                connection failure; ``0`` turns it off. Other writes are sent once;
+                ``monitors.create()`` keeps its own retry, which this does not change.
             user_agent: Optional User-Agent header override.
             default_tier: Default result tier for every search. Falls back to ``TELEM_TIER``.
             default_fields: Default explicit field list. Falls back to ``TELEM_FIELDS`` (csv).
@@ -85,13 +94,27 @@ class Telem(BaseClient):
             default_topic=default_topic,
             default_vertical=default_vertical,
             vertical=vertical,
+            max_retries=max_retries,
         )
         self._client = httpx.Client(timeout=timeout, headers=self._headers())
         self._sessions = SessionsResource(self)
         self._monitors = MonitorsResource(self)
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        """Issue a GET request and return the parsed body (raising typed errors on failure)."""
+        """Issue a GET request and return the parsed body (raising typed errors on failure).
+        A 5xx, a 429 or a connection failure is sent again, up to ``max_retries`` times."""
+        attempt = 0
+        while True:
+            try:
+                return self._get_once(path, params)
+            except TelemError as exc:
+                wait = read_retry_wait(exc, attempt, self.max_retries)
+                if wait is None:
+                    raise
+            _sleep(wait)
+            attempt += 1
+
+    def _get_once(self, path: str, params: dict[str, Any] | None) -> Any:
         try:
             response = self._client.get(self._url(path), params=params)
         except httpx.TimeoutException as exc:

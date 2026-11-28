@@ -50,6 +50,9 @@ _MAX_BACKOFF_WAIT = 10.0
 _RETRY_BASE_WAIT = 0.5
 _IDEMPOTENCY_KEY = re.compile(r"[\x21-\x7e]{1,255}")
 _RETRY_AFTER_SECONDS = re.compile(r"\s*[0-9]+\s*")
+#: A GET is sent again up to this many times, as the JS SDK's ``maxRetries``.
+_DEFAULT_MAX_RETRIES = 2
+_MAX_RETRY_WAIT = 30.0
 
 
 def _csv_env(name: str) -> list[str] | None:
@@ -129,7 +132,11 @@ class BaseClient:
         default_topic: str | None = None,
         default_vertical: str | None = None,
         vertical: str | None = None,
+        max_retries: int = _DEFAULT_MAX_RETRIES,
     ) -> None:
+        if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
+            raise ValueError(f"max_retries must be a whole number of retries, got {max_retries!r}")
+        self.max_retries = max_retries
         # Credentials: argument, else env var, else ``~/.telem/credentials.json`` — the
         # file the wizard/`--login` writes, so an installed user never has to export
         # anything (boto/gh precedent). The file is read ONLY when something is still
@@ -626,6 +633,28 @@ def create_retry_wait(error: TelemError, attempt: int, elapsed: float) -> float 
     else:
         wait = min(_jittered(_RETRY_BASE_WAIT * 2**attempt), _MAX_BACKOFF_WAIT)
     return None if elapsed + wait > _CREATE_RETRY_BUDGET else wait
+
+
+def read_retry_wait(error: TelemError, attempt: int, max_retries: int) -> float | None:
+    """Seconds to wait before sending a GET again, or ``None`` when ``error`` is final.
+
+    The JS SDK's rule for reads: a 5xx, a 429 or a connection failure is retried up to
+    ``max_retries`` times, after ``Retry-After`` (seconds form) or else 0.5 s doubling,
+    capped at 30 s, without jitter. A timeout is not retried, nor is a request httpx
+    could not form. Writes are never retried here."""
+    if attempt >= max_retries or isinstance(error, TelemTimeoutError):
+        return None
+    if isinstance(error, TelemConnectionError):
+        if isinstance(error.__cause__, (httpx.LocalProtocolError, httpx.UnsupportedProtocol)):
+            return None
+    elif not isinstance(error, APIStatusError) or not (
+        (error.status_code or 0) >= 500 or error.status_code == 429
+    ):
+        return None
+    retry_after = error.retry_after
+    if retry_after is not None and _RETRY_AFTER_SECONDS.fullmatch(retry_after):
+        return min(float(retry_after), _MAX_RETRY_WAIT)
+    return min(_RETRY_BASE_WAIT * 2**attempt, _MAX_RETRY_WAIT)
 
 
 def _iso(value: str | date) -> str:
