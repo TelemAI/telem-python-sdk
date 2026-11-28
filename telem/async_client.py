@@ -15,6 +15,7 @@ from telem.errors import TelemError
 from telem.models import FetchResponse, ProviderInfo, SearchResponse
 from telem.resources.monitors import AsyncMonitorsResource
 from telem.resources.sessions import AsyncSessionsResource
+from telem.resources.webhook_endpoints import AsyncWebhookEndpointsResource
 
 
 _sleep = asyncio.sleep
@@ -99,6 +100,7 @@ class AsyncTelem(BaseClient):
         self._client = httpx.AsyncClient(timeout=timeout, headers=self._headers())
         self._sessions = AsyncSessionsResource(self)
         self._monitors = AsyncMonitorsResource(self)
+        self._webhook_endpoints = AsyncWebhookEndpointsResource(self)
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """Issue a GET request and return the parsed body (raising typed errors on failure).
@@ -373,6 +375,11 @@ class AsyncTelem(BaseClient):
         a monitor created with inputs collects (onboarding, apply_onboarding, expansions,
         confirm_expansion, revert_expansion, data_map, companies) and the deprecated poll."""
         return self._monitors
+
+    @property
+    def webhook_endpoints(self) -> AsyncWebhookEndpointsResource:
+        """Access the project's webhook endpoints (create, list, get, update, delete, rotate)."""
+        return self._webhook_endpoints
 
     @property
     def sessions(self) -> AsyncSessionsResource:

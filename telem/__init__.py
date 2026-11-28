@@ -51,6 +51,9 @@ from telem.models import (
     SessionHistory,
     SessionResults,
     SessionSummary,
+    WebhookEndpoint,
+    WebhookEndpointCreated,
+    WebhookEndpointRotated,
 )
 from telem.resources.monitors import verify_webhook
 from telem._version import __version__
@@ -92,6 +95,9 @@ __all__ = [
     "DataMap",
     "CompanyList",
     "CompanyListRow",
+    "WebhookEndpoint",
+    "WebhookEndpointCreated",
+    "WebhookEndpointRotated",
     "verify_webhook",
     "TelemError",
     "AuthError",

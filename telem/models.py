@@ -647,6 +647,44 @@ class CompanyList(_KeepsRaw):
     companies: list[CompanyListRow] = Field(default_factory=list)
 
 
+class WebhookEndpoint(_KeepsRaw):
+    """One of the project's webhook endpoints. Its secret is shown only by
+    :class:`WebhookEndpointCreated` and :class:`WebhookEndpointRotated`."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    url: str
+    #: The monitor tags it takes deliveries for, any one of them; ``[]`` takes every monitor.
+    tags: list[str] = Field(default_factory=list)
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class WebhookEndpointCreated(WebhookEndpoint):
+    """The answer to a create: the endpoint and its secret, shown only here and on rotate."""
+
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    #: ``whsec_…``: check each delivery's ``Telem-Signature`` with it. Kept out of ``repr``
+    #: and ``str``, as is ``raw``, which holds it too.
+    secret: str = Field(repr=False)
+    raw: dict[str, Any] = Field(default_factory=dict, repr=False)
+
+
+class WebhookEndpointRotated(_KeepsRaw):
+    """The answer to a rotate: the new secret. The one it replaces still signs until
+    ``previous_until``."""
+
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    id: str
+    #: Kept out of ``repr`` and ``str``, as is ``raw``, which holds it too.
+    secret: str = Field(repr=False)
+    previous_until: str
+    raw: dict[str, Any] = Field(default_factory=dict, repr=False)
+
+
 class FeedbackResult(_KeepsRaw):
     """The labelled fact's status now: :meth:`~telem.resources.monitors.MonitorsResource.feedback`."""
 
